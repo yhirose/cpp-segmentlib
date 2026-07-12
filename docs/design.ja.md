@@ -466,6 +466,16 @@ SegmentLibMLP <version>\n
 - 差が out-of-domain で**広がらない**ことは、MLP の窓内埋め込み方式が KyTea の辞書素性と同程度にジャンルをまたいで一般化することを示す。3倍規模・2ジャンルでも「構成（w=5等の既定値）を変える必要はない」という初回の判断を追認。
 - コーパス実体（`corpus/ud-pud/`）は models/・ud-gsd/ 同様 gitignore 対象。再現は上記 fetch スクリプト＋`scripts/eval_segmentation.py --gold corpus/ud-pud/test.kytea.txt --command '...kytea...' --command '...segmenter...'`。
 
+**速度の多ジャンル再計測（同日、`bench/bench_segment` in-process・best-of-8プロセス×15/30イテレーション、M1 Pro）**：445節の速度実測は青空文庫由来の GSD train（Wikipedia系、277,433字）1ジャンルのみだった。PUD test（news/Wikipedia対訳、48,260字）を第2ジャンルとして追加計測：
+
+| ジャンル | MLP（int16+NEON） | 実KyTea（libkytea） | 比 |
+|---|---|---|---|
+| GSD train（Wikipedia、277K字） | 3.34 M chars/sec | 1.40 M chars/sec | 2.39x |
+| PUD test（news対訳、48K字） | 3.49 M chars/sec | 1.58 M chars/sec | 2.21x |
+
+- 445節の「2.2〜2.4x」の範囲に両ジャンルとも収まり、**分割速度はジャンルに非感受**であることを確認（想定どおり——スコア計算は EGC 窓の整数演算のみで、語彙・文体には依存しない）。コーパスサイズの違い（277K字 vs 48K字）による測定ノイズは残るが、桁が変わるような乖離はない。
+- これで design.ja.md 10節の「より大規模・多ジャンルのコーパスでの再計測」は精度・速度とも完了（未計測なのは配布モデル同等の大規模コーパス＝BCCWJ相当のみで、これは4.8節冒頭のとおり入手不可のため対象外）。
+
 ### 4.9 学習側の設計（C++自前実装）
 
 学習エンジンは本ライブラリで自前実装する（外部フレームワーク非依存）。学習は fp32、推論は int16（4.6節）で、両者はモデルファイル（4.7節）で受け渡す。**推論（ライブラリ本体の成果物）は順伝播のみ**で、学習コンポーネントはビルド上分離する（推論バイナリに BLAS/CUDA を要求しない）。
@@ -1024,7 +1034,7 @@ cpp-segmentlib/
 - [x] ロード短縮 第10弾：free-list cap を`262144→8192`（DFS前提で最適）。wordDict構築 load 2224→373ms（約6×）、推論・バイト一致維持。block-close未実装で目的達成（9.4節）
 - [x] double-array構築の高速化：block-closeは未実装だが、free-list capをDFS前提で`262144→8192`に調整するだけでload 2224→373ms相当を達成（9.4節 第10弾）。tightパッキングが必要になった場合はblock-close実装の余地は残る
 - [x] ベンチのマルチスレッド版：`Segmenter::tokenize_all`の並列ベンチを追加（9.2/9.4節：8スレッドで41 M/s、Vaporetto単スレッドの約5倍）
-- [~] より大規模・多ジャンルのコーパスでの再計測：**クロスジャンル精度は完了**（4.8節）。UD_Japanese-PUD（別ジャンル out-of-domain、1000文・27,788境界）を追加し、GSD学習済みモデルを再学習せず適用。KyTea/MLP とも精度劣化なし（PUD の方が高い）、MLP-KyTea 差は 0.6〜0.7pt で安定（GSD単独0.74pt→PUD0.62pt→合算0.67pt）。3倍規模・2ジャンルで初回の0.7ptが代表値と確認。取得は `scripts/fetch_ud_pud_corpus.sh`。残：速度の多ジャンル再計測（現状9.4節のin-processベンチは青空文庫=文学71万字のみ。ただし分割速度はジャンル非感受のため優先度低）
+- [x] より大規模・多ジャンルのコーパスでの再計測：**精度・速度とも完了**（4.8節）。UD_Japanese-PUD（別ジャンル out-of-domain、1000文・27,788境界）を追加し、GSD学習済みモデルを再学習せず適用。精度：KyTea/MLP とも劣化なし（PUD の方が高い）、MLP-KyTea 差は 0.6〜0.7pt で安定（GSD単独0.74pt→PUD0.62pt→合算0.67pt）、3倍規模・2ジャンルで初回の0.7ptが代表値と確認。速度：GSD train 2.39x・PUD test 2.21x（実KyTea比）で既存の「2.2〜2.4x」レンジ内、分割速度はジャンル非感受と確認。取得は `scripts/fetch_ud_pud_corpus.sh`。残るのは配布モデル相当の大規模コーパス（BCCWJ）のみで、これは入手不可（4.8節冒頭）
 - [~] `Automaton<Payload>`のpayload平坦化第11弾：`FeatVec`ペイロードを連続バッファ化する最適化を実装したが、`Release`でのA/B計測（背中合わせ・best-of-7・6ラウンド）で効果なしと判明し撤回（負の結果、9.4節 第11弾）。真因はビルド構成の見落とし（`Debug`）で、`Release`再構成のみで回復した
 - [x] タグ推定込みのモデルロード時間の内訳を実測：**word_dict構築が約88%（〜1150ms）、subword辞書＋2レベルLMは合計約16ms（約1%）**。「subword/LMが主因」という当初の推測は否定された。ロード短縮の対象はword_dictであってsubword/LMではない（遅延ロードは約16msしか縮まず割に合わない）（9.2.1節）
 - [x] タグ推定の先頭候補選択を毎語フルソート→線形argmaxに（第12弾、+10〜20%・バイト一致維持、9.4節）

@@ -21,5 +21,9 @@ curl -sL "${BASE_URL}/ja_pud-ud-test.conllu" -o "${OUT_DIR}/test.conllu"
 echo "Converting test..."
 python3 "${SCRIPT_DIR}/convert_ud_gsd_corpus.py" \
     "${OUT_DIR}/test.conllu" "${OUT_DIR}/test.kytea.txt"
+# Raw (untagged) surface text, for bench/bench_segment and bench/.vendor/bench_kytea
+# (design.ja.md 4.8's multi-genre speed re-measurement), which expect plain text.
+python3 "${SCRIPT_DIR}/strip_kytea_tags.py" \
+    "${OUT_DIR}/test.kytea.txt" "${OUT_DIR}/test.raw.txt"
 
-echo "Done: ${OUT_DIR}/test.kytea.txt"
+echo "Done: ${OUT_DIR}/{test.kytea.txt,test.raw.txt}"
