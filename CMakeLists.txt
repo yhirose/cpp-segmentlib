@@ -9,6 +9,14 @@ if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
+# MSVC needs /EHsc for exceptions (doctest requires them) and /utf-8 for the
+# UTF-8 string literals throughout the codebase. add_compile_options keeps
+# these even when CI overrides CMAKE_CXX_FLAGS (e.g. to add /arch:AVX2), which
+# would otherwise drop CMake's default /EHsc and disable exceptions.
+if(MSVC)
+    add_compile_options(/EHsc /utf-8)
+endif()
+
 option(SEGMENTLIB_BUILD_TESTS "Build the test suite" ON)
 option(SEGMENTLIB_BUILD_BENCH "Build the benchmark tools" ON)
 # Training is a development tool, physically separated from inference: the

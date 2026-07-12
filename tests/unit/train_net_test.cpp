@@ -74,6 +74,15 @@ TEST_CASE("analytic gradients match finite differences") {
     }
 
     const float eps = 1e-2f;
+    // Snapshot the ReLU activation pattern (sign of the pre-activation ws.a)
+    // so we can detect when a perturbation straddles a kink.
+    const auto relu_mask = [&]() {
+        std::vector<char> mask(ws.a.size());
+        for (std::size_t k = 0; k < ws.a.size(); ++k) {
+            mask[k] = ws.a[k] > 0.0f;
+        }
+        return mask;
+    };
     const auto check_tensor = [&](std::vector<float>& tensor,
                                   const std::vector<float>& analytic,
                                   const char* name) {
@@ -84,9 +93,20 @@ TEST_CASE("analytic gradients match finite differences") {
             const float saved = tensor[i];
             tensor[i] = saved + eps;
             const double plus = loss_at();
+            const std::vector<char> mask_plus = relu_mask();
             tensor[i] = saved - eps;
             const double minus = loss_at();
+            const std::vector<char> mask_minus = relu_mask();
             tensor[i] = saved;
+            // A two-sided finite difference is only valid when both evaluations
+            // land on the same linear piece of the ReLU. If the perturbation
+            // flips a hidden unit's activation, the numeric gradient straddles
+            // a kink and is meaningless — skip it (the analytic gradient is the
+            // exact subgradient at the unperturbed point). This makes the check
+            // robust to float-rounding differences across platforms (ARM vs x86).
+            if (mask_plus != mask_minus) {
+                continue;
+            }
             const double numeric = (plus - minus) / (2.0 * eps);
             const double tolerance =
                 1e-3 + 0.02 * std::max(std::abs(numeric),
