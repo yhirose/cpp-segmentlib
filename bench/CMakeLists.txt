@@ -1,0 +1,2 @@
+add_executable(bench_segment bench_segment.cpp)
+target_link_libraries(bench_segment PRIVATE segmentlib)

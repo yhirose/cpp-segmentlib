@@ -1,0 +1,83 @@
+# Build + test across the SIMD kernel dispatch targets (mlp_impl_design.ja.md
+# I.3): NEON on Apple Silicon, AVX2 and scalar on x86_64 Linux, MSVC/AVX2 on
+# Windows (best-effort, design.ja.md 5.9). The kernels test asserts the
+# dispatched path is bit-exact with the scalar oracle, so each runner verifies
+# its own SIMD path on real hardware.
+#
+# Golden tests skip themselves when the KyTea model is absent (it is fetched
+# from the Wayback Machine and not vendored), so no model download happens in CI.
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  test:
+    name: ${{ matrix.name }}
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - name: macOS arm64 (NEON)
+            os: macos-15
+            cmake_args: ''
+          - name: Linux x86_64 (AVX2)
+            os: ubuntu-24.04
+            cmake_args: >-
+              -DCMAKE_CXX_COMPILER=g++-14
+              -DCMAKE_CXX_FLAGS=-mavx2
+          - name: Linux x86_64 (scalar)
+            os: ubuntu-24.04
+            cmake_args: -DCMAKE_CXX_COMPILER=g++-14
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies (Linux)
+        if: runner.os == 'Linux'
+        # GCC 14 for C++23 (std::print / std::expected); OpenBLAS for the
+        # training target (the only place BLAS links, design.ja.md 5.9).
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14 libopenblas-dev ninja-build
+
+      - name: Install dependencies (macOS)
+        run: brew install ninja
+        if: runner.os == 'macOS'
+
+      - name: Configure
+        run: >
+          cmake -S . -B build -G Ninja
+          -DCMAKE_BUILD_TYPE=Release
+          -DSEGMENTLIB_BUILD_TRAINING=ON
+          -DSEGMENTLIB_BUILD_BENCH=OFF
+          ${{ matrix.cmake_args }}
+
+      - name: Build
+        run: cmake --build build
+
+      - name: Test
+        run: ctest --test-dir build --output-on-failure
+
+  # Windows is best-effort (design.ja.md 5.9): MSVC's C++23 coverage is
+  # believed sufficient but has never been exercised, so this job reports
+  # without blocking the workflow. Training stays off (no easy BLAS); the
+  # inference tests — including the AVX2-vs-scalar kernels check under
+  # /arch:AVX2 — still run.
+  windows:
+    name: Windows x86_64 (MSVC, AVX2, best-effort)
+    runs-on: windows-latest
+    continue-on-error: true
+    steps:
+      - uses: actions/checkout@v4
+      - name: Configure
+        run: >
+          cmake -S . -B build
+          -DCMAKE_CXX_FLAGS="/arch:AVX2 /utf-8"
+          -DSEGMENTLIB_BUILD_BENCH=OFF
+      - name: Build
+        run: cmake --build build --config Release
+      - name: Test
+        run: ctest --test-dir build -C Release --output-on-failure

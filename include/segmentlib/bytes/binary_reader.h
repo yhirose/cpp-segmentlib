@@ -1,0 +1,105 @@
+#pragma once
+
+#include <bit>
+#include <cstddef>
+#include <cstdint>
+#include <cstring>
+#include <span>
+#include <stdexcept>
+#include <string>
+#include <type_traits>
+
+namespace segmentlib::bytes {
+
+// Thrown on any attempt to read past the end of the buffer or on a malformed
+// low-level structure. It is caught once, at the model-loading boundary, and
+// converted into a segmentlib::Error there — so the rest of the parser can be
+// written straight-line without threading error codes through every call.
+class ParseError : public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
+// A forward-only cursor over an in-memory byte buffer.
+//
+// KyTea's binary model writes native-endian fixed-width integers; on the
+// little-endian platforms we target that is little-endian on disk. read<T>()
+// interprets integers as little-endian regardless of host endianness, so the
+// reader stays correct even on a big-endian host.
+class BinaryReader {
+public:
+    explicit BinaryReader(std::span<const std::byte> data) noexcept : data_(data) {}
+
+    [[nodiscard]] std::size_t position() const noexcept { return pos_; }
+    [[nodiscard]] std::size_t remaining() const noexcept { return data_.size() - pos_; }
+    [[nodiscard]] bool eof() const noexcept { return pos_ >= data_.size(); }
+
+    // Reads a trivially-copyable value. Integers wider than a byte are decoded
+    // as little-endian.
+    template <class T>
+    [[nodiscard]] T read() {
+        static_assert(std::is_trivially_copyable_v<T>);
+        T value = read_raw<T>();
+        if constexpr (std::is_integral_v<T> && sizeof(T) > 1) {
+            if constexpr (std::endian::native == std::endian::big) {
+                value = std::byteswap(value);
+            }
+        }
+        return value;
+    }
+
+    [[nodiscard]] bool read_bool() { return read_raw<std::uint8_t>() != 0; }
+
+    // Reads a NUL-terminated string (KyTea's on-disk KyteaString form). The
+    // terminating NUL is consumed but not included in the result.
+    [[nodiscard]] std::string read_cstring() {
+        const std::size_t start = pos_;
+        while (pos_ < data_.size() && data_[pos_] != std::byte{0}) {
+            ++pos_;
+        }
+        if (pos_ >= data_.size()) {
+            throw ParseError("unterminated C string");
+        }
+        std::string out(reinterpret_cast<const char*>(data_.data()) + start, pos_ - start);
+        ++pos_;  // consume the NUL
+        return out;
+    }
+
+    // Reads up to and including a '\n' (used for the model's header line).
+    // The newline is consumed but not included in the result.
+    [[nodiscard]] std::string read_line() {
+        const std::size_t start = pos_;
+        while (pos_ < data_.size() && data_[pos_] != std::byte{'\n'}) {
+            ++pos_;
+        }
+        std::string out(reinterpret_cast<const char*>(data_.data()) + start, pos_ - start);
+        if (pos_ < data_.size()) {
+            ++pos_;  // consume the newline
+        }
+        return out;
+    }
+
+    void skip(std::size_t n) {
+        if (n > remaining()) {
+            throw ParseError("skip past end of buffer");
+        }
+        pos_ += n;
+    }
+
+private:
+    template <class T>
+    [[nodiscard]] T read_raw() {
+        if (sizeof(T) > remaining()) {
+            throw ParseError("read past end of buffer");
+        }
+        T value;
+        std::memcpy(&value, data_.data() + pos_, sizeof(T));
+        pos_ += sizeof(T);
+        return value;
+    }
+
+    std::span<const std::byte> data_;
+    std::size_t pos_ = 0;
+};
+
+}  // namespace segmentlib::bytes

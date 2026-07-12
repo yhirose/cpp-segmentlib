@@ -1,0 +1,9 @@
+# Aozora Bunko works used to build the benchmark corpus (public domain).
+# Format: <card-path>  <title/author, ignored>
+000148/files/789_14547.html   夏目漱石『吾輩は猫である』
+000148/files/752_14964.html   夏目漱石『坊っちゃん』
+000148/files/773_14560.html   夏目漱石『こころ』
+000035/files/1567_14913.html  太宰治『走れメロス』
+000035/files/301_14912.html   太宰治『人間失格』
+000879/files/127_15260.html   芥川龍之介『羅生門』
+000081/files/456_15050.html   宮沢賢治『銀河鉄道の夜』
