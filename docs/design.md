@@ -679,10 +679,10 @@ segmenter predict --model model.bin --scores < input.txt > output.txt           
 | Option | Description |
 |---|---|
 | `--model <path>` | path to the model file (required). Auto-detects whether it is KyTea-compatible / custom MLP (Section 2) |
-| `--backend <kytea\|mlp>` | explicitly specify the backend (to override auto-detection) |
-| `--boundaries-only` | perform only segmentation without tag estimation (uses `tokenize_boundaries`) |
-| `--scores` | also output the classification score for each boundary |
-| `--encode <utf8\|...>` | input encoding (only UTF-8 is supported for now; reserved as room for future extension) |
+| `--backend <kytea\|mlp>` | explicitly specify the backend (to override auto-detection). **Not implemented** (still the initial proposal; auto-detection has been sufficient so far, no demand for it) |
+| `--boundaries-only` | perform only segmentation without tag estimation (uses `tokenize_boundaries`). **Implemented** |
+| `--scores` | also output the classification score for each boundary. **Not implemented** |
+| `--encode` | **decided not to implement** (Section 10). Input is always fixed to UTF-8 — both the model formats (Sections 3.2/4.7) and corpus formats (Section 5) assume UTF-8, so there is no other encoding worth selecting. Malformed UTF-8 bytes cause `CharTable::encode`/`Vocab::encode` to return `ErrorCode::InvalidUtf8`; the CLI flushes any output already produced for earlier lines and then **aborts immediately** (exit code 1, stderr message). It does not silently skip or truncate the offending line — for a library built around byte-exact agreement, silently passing through corrupted input would be a hazard. Verified empirically (`printf 'valid\n\xff\xfe bad\nvalid2\n' \| segmenter predict ...` → only line 1 is emitted, exit 1). Unit-tested at the `CharTable`/`Vocab`/`corpus` layer (`tests/unit/{char_table,vocab,train_corpus}_test.cpp`) |
 
 **Output format**
 
@@ -1007,7 +1007,7 @@ Profiling was used to measure the breakdown in detail, and optimization proceede
 - [~] Multiple-candidate + confidence output (KyTea `-out conf`/`-tagmax`): **not implemented, as unnecessary for the normal use case (single best-scoring answer)** (both KyTea and MeCab default to single-best; N-best/marginal probabilities are niche use cases). Plan §5 originally mis-cited `-alltags`, but that option does not actually exist. Implementing this would require reproducing the margin computation, retaining all candidates, and float formatting, all of which were omitted in step A-2. Deferred until needed (`tag_prediction_plan` §5)
 - [~] Partial-annotation input + hard constraints (equivalent to `-wsconst`, §238/§6.2): constrained parsing not implemented. The distributed JP model's `wsConstraint` is normally empty and has no effect on byte agreement for the default output. Deferred until needed
 - [ ] Training feature (whether to self-implement the KyTea-compatible training engine, or interface with external LIBLINEAR. The `segmenter train` options themselves are already finalized in Section 7.2)
-- [ ] The actual scope of `--encode` support (whether to reject non-UTF-8)
+- [x] The actual scope of `--encode` support (whether to reject non-UTF-8): **decided not to implement** (Section 7.1). No flag is added; input is always fixed to UTF-8. Malformed UTF-8 does not get the offending line truncated — the CLI flushes output for earlier lines and aborts immediately with exit code 1 (already implemented via `CharTable::encode`'s error path, verified empirically). There is no motivation for another encoding (models and corpora both always assume UTF-8), so this closes the item
 - [ ] Whether a pmr-based API is needed, to be decided after benchmarking
 - [x] Inference benchmark against KyTea/Vaporetto (Section 9): correctness gate + in-process measurement. Latest figures (Section 9.2): segmentlib is 5.3× KyTea's single-thread inference speed, with faster loading too, and 38.4× at 8 threads
 - [x] Inference speedup round 1 (Section 9.4): O(1) direct table for root transitions + buffer reuse, 2.84→3.37 M/s (+19%), byte agreement maintained

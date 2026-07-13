@@ -691,10 +691,10 @@ segmenter predict --model model.bin --scores < input.txt > output.txt           
 | オプション | 説明 |
 |---|---|
 | `--model <path>` | モデルファイルのパス（必須）。KyTea互換／独自MLPのいずれかを自動判別する（2節） |
-| `--backend <kytea\|mlp>` | バックエンドを明示的に指定（自動判別を上書きしたい場合） |
-| `--boundaries-only` | タグ推定を行わず分かち書きのみ実行（`tokenize_boundaries`を使用） |
-| `--scores` | 各境界の分類スコアを合わせて出力 |
-| `--encode <utf8\|...>` | 入力エンコーディング（当面UTF-8のみサポート、将来拡張の余地として予約） |
+| `--backend <kytea\|mlp>` | バックエンドを明示的に指定（自動判別を上書きしたい場合）。**未実装**（初期案のまま。自動判別で用が足りているため今のところ要望なし） |
+| `--boundaries-only` | タグ推定を行わず分かち書きのみ実行（`tokenize_boundaries`を使用）。**実装済み** |
+| `--scores` | 各境界の分類スコアを合わせて出力。**未実装** |
+| `--encode` | **実装しないことを決定**（10節）。入力は常にUTF-8固定——モデル（3.2節・4.7節）もコーパス形式（5節）もUTF-8前提で、他エンコーディングを選ぶ余地がそもそもない。不正なUTF-8バイト列は`CharTable::encode`/`Vocab::encode`が`ErrorCode::InvalidUtf8`を返し、CLIは該当行以前の出力をflushした上で**即座に中断**（exit code 1・stderrにメッセージ）する。行を黙ってスキップ・切り詰める設計にはしない（バイト単位一致を旨とするこのライブラリで、壊れた入力を黙って通すのは事故の元）。実測確認済み（`printf 'valid\n\xff\xfe bad\nvalid2\n' \| segmenter predict ...` → 1行目のみ出力・exit 1）。ユニットテストは`CharTable`/`Vocab`/`corpus`層で`InvalidUtf8`を確認済み（`tests/unit/{char_table,vocab,train_corpus}_test.cpp`）
 
 **出力フォーマット**
 
@@ -1017,7 +1017,7 @@ cpp-segmentlib/
 - [~] 複数候補＋信頼度出力（KyTea `-out conf`／`-tagmax`）：**通常ユースケース（最尤1解）には不要のため実装しない**（KyTea/MeCabとも既定single-best、N-best・周辺確率はニッチ用途）。当初plan §5で`-alltags`と誤記していたがそのオプションは実在しない。実装するなら段階A-2で省いたマージン計算＋全候補保持＋float整形の再現が要る。必要が生じるまで見送り（tag_prediction_plan §5）
 - [~] 部分アノテーション入力＋ハード制約（`-wsconst`相当、§238/§6.2）：制約付き解析は未実装。配布jpモデルの`wsConstraint`は通常空で既定出力のバイト一致には無影響。必要が生じるまで見送り
 - [ ] 学習機能（KyTea互換の学習エンジンを自前実装するか、外部LIBLINEAR連携にするか。`segmenter train`のオプション自体は7.2節で確定済み）
-- [ ] `--encode` の実際の対応範囲（UTF-8以外を切り捨てるか）
+- [x] `--encode` の実際の対応範囲（UTF-8以外を切り捨てるか）：**実装しないことに決定**（7.1節）。フラグ自体を追加せず、入力は常にUTF-8固定。不正なUTF-8は行を切り捨てず、出現行以前の出力をflushして即座にexit code 1で中断（既存の`CharTable::encode`のエラー経路で実現済み・実測確認済み）。他エンコーディングを選ぶ動機（モデル・コーパスとも常にUTF-8前提）がそもそもないため、この判断で完結
 - [ ] pmr版APIの要否をベンチマーク後に判断
 - [x] KyTea/Vaporettoとの推論ベンチ（9節）：正確性ゲート＋in-process計測。最新値（9.2節）：segmentlibはKyTea比 シングルスレッド推論5.3×・ロードも高速化、8スレッドで38.4×
 - [x] 推論の高速化 第1弾（9.4節）：root遷移のO(1)直接テーブル化＋バッファ再利用で 2.84→3.37 M/s（+19%）、バイト一致維持
