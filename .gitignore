@@ -4,5 +4,7 @@
 /build-release/
 /build*/
 
-/docs/
+/docs/record.ja.md
+/docs/record.md
+
 __pycache__/
