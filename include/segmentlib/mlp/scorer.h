@@ -18,6 +18,11 @@ struct Workspace {
     std::vector<std::int32_t> acc;    // H (TablePrecision::Int32)
     std::vector<std::int16_t> acc16;  // H (TablePrecision::Int16)
     DictFeatures dict;
+    // Int16 fused path (kernels::fused_score_i16): the per-boundary block
+    // pointers (2w window slots then active dict columns) and 2w×H scratch for
+    // the window slots whose EGC needs fallback synthesis.
+    std::vector<const std::int16_t*> blocks;
+    std::vector<std::int16_t> fallback;
 };
 
 // Scores every EGC boundary of `enc` (M-1 scores for M clusters): the int16

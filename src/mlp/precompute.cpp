@@ -95,24 +95,22 @@ void PrecomputeTable::add_into(std::span<const std::uint32_t> rows,
     synthesize(rows, j, [&](std::size_t h, std::int32_t v) { acc[h] += v; });
 }
 
-void PrecomputeTable::add_into_i16(std::span<const std::uint32_t> rows,
-                                   std::size_t j, std::int16_t* acc) const {
+const std::int16_t* PrecomputeTable::block_i16(
+    std::span<const std::uint32_t> rows, std::size_t j,
+    std::int16_t* scratch) const {
     assert(precision_ == TablePrecision::Int16);
     if (rows.size() == 1) {
-        const std::int16_t* block =
-            table16_.data() +
-            (static_cast<std::size_t>(rows[0]) * (2u * window_) + j) * h_;
-        kernels::add_sat_i16(block, acc, h_);
-        return;
+        return table16_.data() +
+               (static_cast<std::size_t>(rows[0]) * (2u * window_) + j) * h_;
     }
-    // Fallback: the same int32 contribution, requantized exactly as the
-    // table entries were, then saturating-added — bit-exact with the table
-    // path for the same EGC.
+    // Fallback (I.1-(2)) for multi-codepoint EGCs: the int32 contribution
+    // requantized exactly as the table entries were, written to scratch so the
+    // fused scorer can saturating-add it in window order — bit-identical to the
+    // table path for the same EGC.
     synthesize(rows, j, [&](std::size_t h, std::int32_t v) {
-        const std::int16_t q = requant_i16(v);
-        const std::int32_t s = static_cast<std::int32_t>(acc[h]) + q;
-        acc[h] = static_cast<std::int16_t>(std::clamp(s, -32768, 32767));
+        scratch[h] = requant_i16(v);
     });
+    return scratch;
 }
 
 }  // namespace segmentlib::mlp

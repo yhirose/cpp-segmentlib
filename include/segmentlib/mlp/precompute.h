@@ -69,11 +69,18 @@ public:
     // acc[h] += table-or-fallback contribution of the EGC whose constituent
     // rows are `rows`, at window position j (I.2). `acc` must have H entries.
     // Single-row EGCs (and PAD, rows = {0}) hit the table; multi-row EGCs
-    // synthesize. add_into is valid in Int32 mode, add_into_i16 in Int16 mode.
+    // synthesize. Int32 mode only — the Int16 path gathers via block_i16.
     void add_into(std::span<const std::uint32_t> rows, std::size_t j,
                   std::int32_t* acc) const;
-    void add_into_i16(std::span<const std::uint32_t> rows, std::size_t j,
-                      std::int16_t* acc) const;
+
+    // Returns the H-length Int16 contribution block for the EGC `rows` at window
+    // slot j, for the fused scorer (kernels::fused_score_i16). Single-row EGCs
+    // (and PAD) return a pointer straight into the table; multi-row EGCs
+    // synthesize into `scratch` (which must hold >= H int16) and return it. The
+    // Int16 counterpart of add_into.
+    [[nodiscard]] const std::int16_t* block_i16(
+        std::span<const std::uint32_t> rows, std::size_t j,
+        std::int16_t* scratch) const;
 
 private:
     // Per-h fallback contribution (the shared integer kernel of I.1-(2));

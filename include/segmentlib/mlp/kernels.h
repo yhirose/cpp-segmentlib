@@ -97,6 +97,32 @@ inline void add_widen_i16_i32(const std::int16_t* src, std::int32_t* acc,
     }
 }
 
+// The fused per-boundary Int16 score (the whole hidden-unit pass in one
+// register-resident sweep, I.2). Semantically identical to, and bit-exact
+// with, the sequential kernels applied in this exact order:
+//   acc = b1;  for each block: add_sat_i16(block, acc);  relu_i16(acc);
+//   return dot_i16(w2, acc)
+// `blocks[0..nblocks)` are the H-length int16 contributions (the 2w window
+// table blocks in window order, then any dictionary columns), added with the
+// same per-lane saturation order as add_sat_i16, so the result cannot differ
+// from the unfused path. The fusion keeps each H-chunk of the accumulator in
+// registers across all the adds and the relu, eliminating the ~2w redundant
+// accumulator round-trips through memory that dominate the scoring hot path.
+[[nodiscard]] inline std::int64_t fused_score_i16(
+    const std::int16_t* b1, const std::int16_t* const* blocks,
+    std::size_t nblocks, const std::int16_t* w2, std::size_t h) {
+    std::int64_t sum = 0;
+    for (std::size_t i = 0; i < h; ++i) {
+        std::int32_t a = b1[i];
+        for (std::size_t b = 0; b < nblocks; ++b) {
+            a = std::clamp<std::int32_t>(a + blocks[b][i], -32768, 32767);
+        }
+        a = std::max<std::int32_t>(a, 0);  // relu
+        sum += static_cast<std::int64_t>(w2[i]) * a;
+    }
+    return sum;
+}
+
 }  // namespace scalar
 
 #if defined(SEGMENTLIB_KERNELS_NEON)
@@ -177,6 +203,36 @@ inline void add_widen_i16_i32(const std::int16_t* src, std::int32_t* acc,
         vst1q_s32(acc + i + 4, vaddw_high_s16(vld1q_s32(acc + i + 4), s));
     }
     scalar::add_widen_i16_i32(src + i, acc + i, n - i);
+}
+
+[[nodiscard]] inline std::int64_t fused_score_i16(
+    const std::int16_t* b1, const std::int16_t* const* blocks,
+    std::size_t nblocks, const std::int16_t* w2, std::size_t h) {
+    const int16x8_t zero = vdupq_n_s16(0);
+    int64x2_t sum = vdupq_n_s64(0);
+    std::size_t i = 0;
+    for (; i + 8 <= h; i += 8) {
+        int16x8_t a = vld1q_s16(b1 + i);
+        for (std::size_t b = 0; b < nblocks; ++b) {
+            a = vqaddq_s16(a, vld1q_s16(blocks[b] + i));  // saturating, in order
+        }
+        a = vmaxq_s16(a, zero);  // relu
+        const int16x8_t w = vld1q_s16(w2 + i);
+        // int16×int16 → int32×4 per half, pairwise-accumulate into int64
+        // (associative, so the grouping does not change the sum).
+        sum = vpadalq_s32(sum, vmull_s16(vget_low_s16(w), vget_low_s16(a)));
+        sum = vpadalq_s32(sum, vmull_high_s16(w, a));
+    }
+    std::int64_t total = vaddvq_s64(sum);
+    for (; i < h; ++i) {  // tail, identical per-lane order
+        std::int32_t a = b1[i];
+        for (std::size_t b = 0; b < nblocks; ++b) {
+            a = std::clamp<std::int32_t>(a + blocks[b][i], -32768, 32767);
+        }
+        a = std::max<std::int32_t>(a, 0);
+        total += static_cast<std::int64_t>(w2[i]) * a;
+    }
+    return total;
 }
 
 #elif defined(SEGMENTLIB_KERNELS_AVX2)
@@ -298,6 +354,44 @@ inline void add_widen_i16_i32(const std::int16_t* src, std::int32_t* acc,
     scalar::add_widen_i16_i32(src + i, acc + i, n - i);
 }
 
+[[nodiscard]] inline std::int64_t fused_score_i16(
+    const std::int16_t* b1, const std::int16_t* const* blocks,
+    std::size_t nblocks, const std::int16_t* w2, std::size_t h) {
+    const __m256i zero = _mm256_setzero_si256();
+    __m256i sum = _mm256_setzero_si256();  // 4 × int64 lanes
+    std::size_t i = 0;
+    for (; i + 16 <= h; i += 16) {
+        __m256i a = _mm256_loadu_si256(reinterpret_cast<const __m256i*>(b1 + i));
+        for (std::size_t b = 0; b < nblocks; ++b) {
+            a = _mm256_adds_epi16(  // saturating, in order
+                a, _mm256_loadu_si256(
+                       reinterpret_cast<const __m256i*>(blocks[b] + i)));
+        }
+        a = _mm256_max_epi16(a, zero);  // relu
+        const __m256i w =
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(w2 + i));
+        // madd: int16×int16 pair sums → 8 × int32; each ≤ 2·32767² < 2^31 (a is
+        // relu'd into [0,32767]), so the pair sum cannot overflow int32.
+        const __m256i pairs = _mm256_madd_epi16(w, a);
+        sum = _mm256_add_epi64(
+            sum, _mm256_cvtepi32_epi64(_mm256_castsi256_si128(pairs)));
+        sum = _mm256_add_epi64(
+            sum, _mm256_cvtepi32_epi64(_mm256_extracti128_si256(pairs, 1)));
+    }
+    alignas(32) std::int64_t lanes[4];
+    _mm256_store_si256(reinterpret_cast<__m256i*>(lanes), sum);
+    std::int64_t total = lanes[0] + lanes[1] + lanes[2] + lanes[3];
+    for (; i < h; ++i) {  // tail, identical per-lane order
+        std::int32_t a = b1[i];
+        for (std::size_t b = 0; b < nblocks; ++b) {
+            a = std::clamp<std::int32_t>(a + blocks[b][i], -32768, 32767);
+        }
+        a = std::max<std::int32_t>(a, 0);
+        total += static_cast<std::int64_t>(w2[i]) * a;
+    }
+    return total;
+}
+
 #else  // scalar dispatch
 
 inline void add_i32(const std::int32_t* src, std::int32_t* acc, std::size_t n) {
@@ -326,6 +420,11 @@ inline void relu_i16(std::int16_t* acc, std::size_t n) {
 inline void add_widen_i16_i32(const std::int16_t* src, std::int32_t* acc,
                               std::size_t n) {
     scalar::add_widen_i16_i32(src, acc, n);
+}
+[[nodiscard]] inline std::int64_t fused_score_i16(
+    const std::int16_t* b1, const std::int16_t* const* blocks,
+    std::size_t nblocks, const std::int16_t* w2, std::size_t h) {
+    return scalar::fused_score_i16(b1, blocks, nblocks, w2, h);
 }
 
 #endif

@@ -381,10 +381,12 @@ No dictionary, default configuration (w=5, d=64, H=256). Zero quantization-induc
 
 | Genre | MLP | Real KyTea | Ratio |
 |---|---|---|---|
-| GSD train (Wikipedia, 277K chars) | 3.34 M chars/sec | 1.40 M chars/sec | 2.39x |
-| PUD test (news translation, 48K chars) | 3.49 M chars/sec | 1.58 M chars/sec | 2.21x |
+| GSD train (Wikipedia, 277K chars) | 5.11 M chars/sec | 1.40 M chars/sec | 3.65x |
+| PUD test (news translation, 48K chars) | 5.60 M chars/sec | 1.58 M chars/sec | 3.54x |
 
 Segmentation speed is genre-insensitive (score computation is pure integer arithmetic over the EGC window, independent of vocabulary or style).
+
+**Fused Int16 scoring kernel** (profile-driven follow-up optimization): profiling (`sample`, M1 Pro) showed 71.5% of self-time concentrated in the loop that saturating-adds the 2w table blocks into the accumulator, most of it redundant L1 round-trips on the accumulator (one add costs 3 memory ops: load block, load acc, store acc — the working set is a few hundred KB per sentence and stays L2-resident, so this is not DRAM-bandwidth bound). `kernels::fused_score_i16` fuses "init b1 → 2w window adds → dict-column adds → ReLU → output dot" into a single pass that keeps an H-chunk of the accumulator in SIMD registers throughout, replacing the ~2w+3 full-width accumulator round-trips per boundary with one register-resident sweep. NNUE-style incremental updates across boundaries are structurally ruled out — the same character maps to a different W1 column when its window position j changes — so the 2w window contributions themselves are still computed; only the memory traffic carrying them is cut. Int16 saturating adds are order-dependent, so the fused kernel adds blocks in the same order as the old implementation (window position, then dict columns), verified bit-identical via the existing Int16-vs-Int32 decision-flip test (accuracy/decisions unchanged). Single-thread speed improved roughly 1.4-1.5x (GSD train: 3.5M → 5.11M chars/sec).
 
 ### 4.9 Training-Side Design (Self-Implemented in C++)
 

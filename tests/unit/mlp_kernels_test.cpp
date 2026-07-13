@@ -114,3 +114,42 @@ TEST_CASE("widening add matches the scalar reference") {
         CHECK(actual == expected);
     }
 }
+
+TEST_CASE("fused int16 score matches the unfused kernel sequence") {
+    std::mt19937 rng(17);
+    // nblocks spans a realistic 2w (=10) plus dict columns, and the degenerate
+    // 0/1 cases; H spans lane-tail widths and the real hidden dims (256/512).
+    constexpr std::size_t kBlockCounts[] = {0, 1, 2, 10, 13};
+    constexpr std::size_t kHidden[] = {1, 7, 8, 15, 16, 63, 256, 512};
+    for (const std::size_t nblocks : kBlockCounts) {
+        for (const std::size_t h : kHidden) {
+            CAPTURE(nblocks);
+            CAPTURE(h);
+            // Full int16 range so the per-lane saturating adds clip repeatedly:
+            // the fused path must reproduce the exact saturation order.
+            const auto b1 = random_i16(rng, h);
+            const auto w2 = random_i16(rng, h);
+            std::vector<std::vector<std::int16_t>> block_data;
+            std::vector<const std::int16_t*> blocks;
+            for (std::size_t b = 0; b < nblocks; ++b) {
+                block_data.push_back(random_i16(rng, h));
+            }
+            for (const auto& bd : block_data) {
+                blocks.push_back(bd.data());
+            }
+
+            // Reference: copy b1, saturating-add each block in order, relu, dot.
+            std::vector<std::int16_t> acc = b1;
+            for (const auto& bd : block_data) {
+                kernels::scalar::add_sat_i16(bd.data(), acc.data(), h);
+            }
+            kernels::scalar::relu_i16(acc.data(), h);
+            const std::int64_t expected =
+                kernels::scalar::dot_i16(w2.data(), acc.data(), h);
+
+            const std::int64_t actual = kernels::fused_score_i16(
+                b1.data(), blocks.data(), nblocks, w2.data(), h);
+            CHECK(actual == expected);
+        }
+    }
+}
