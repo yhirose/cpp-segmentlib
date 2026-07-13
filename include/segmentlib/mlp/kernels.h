@@ -12,6 +12,13 @@
 //   relu      acc[h]  = max(acc[h], 0)
 //   dot       Σ_h w2[h] · acc[h] → int64    (the output layer product)
 //
+// plus one widening add shared with the KyTea backend's tag scorer (its
+// numWeights-wide int16 weight blocks accumulate into int32 scores — the
+// hottest loop of tag prediction, design.ja.md 9.2.1; the kernel is a plain
+// integer op, not MLP-specific, so it lives with the others):
+//
+//   add_widen acc[h] += src[h]              (int16 src → int32 acc, exact)
+//
 // `kernels::scalar` is the always-compiled reference implementation — the
 // oracle the SIMD paths are tested against (I.3) and the fallback for
 // platforms with neither NEON nor AVX2. The unqualified functions dispatch at
@@ -79,6 +86,15 @@ inline void relu_i16(std::int16_t* acc, std::size_t n) {
         sum += static_cast<std::int32_t>(w2[i]) * acc[i];
     }
     return sum;
+}
+
+// Widening add (int16 source into an int32 accumulator, exact — no
+// saturation). The KyTea tag scorer's per-match weight accumulation.
+inline void add_widen_i16_i32(const std::int16_t* src, std::int32_t* acc,
+                              std::size_t n) {
+    for (std::size_t i = 0; i < n; ++i) {
+        acc[i] += src[i];
+    }
 }
 
 }  // namespace scalar
@@ -149,6 +165,18 @@ inline void relu_i16(std::int16_t* acc, std::size_t n) {
         sum = vpadalq_s32(sum, hi);
     }
     return vaddvq_s64(sum) + scalar::dot_i16(w2 + i, acc + i, n - i);
+}
+
+inline void add_widen_i16_i32(const std::int16_t* src, std::int32_t* acc,
+                              std::size_t n) {
+    std::size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        const int16x8_t s = vld1q_s16(src + i);
+        // vaddw widens each int16 half to int32 and adds — exact.
+        vst1q_s32(acc + i, vaddw_s16(vld1q_s32(acc + i), vget_low_s16(s)));
+        vst1q_s32(acc + i + 4, vaddw_high_s16(vld1q_s32(acc + i + 4), s));
+    }
+    scalar::add_widen_i16_i32(src + i, acc + i, n - i);
 }
 
 #elif defined(SEGMENTLIB_KERNELS_AVX2)
@@ -255,6 +283,21 @@ inline void relu_i16(std::int16_t* acc, std::size_t n) {
            scalar::dot_i16(w2 + i, acc + i, n - i);
 }
 
+inline void add_widen_i16_i32(const std::int16_t* src, std::int32_t* acc,
+                              std::size_t n) {
+    std::size_t i = 0;
+    for (; i + 8 <= n; i += 8) {
+        // cvtepi16_epi32 sign-extends 8 int16 lanes to int32 — exact.
+        const __m256i s = _mm256_cvtepi16_epi32(
+            _mm_loadu_si128(reinterpret_cast<const __m128i*>(src + i)));
+        const __m256i a =
+            _mm256_loadu_si256(reinterpret_cast<const __m256i*>(acc + i));
+        _mm256_storeu_si256(reinterpret_cast<__m256i*>(acc + i),
+                            _mm256_add_epi32(a, s));
+    }
+    scalar::add_widen_i16_i32(src + i, acc + i, n - i);
+}
+
 #else  // scalar dispatch
 
 inline void add_i32(const std::int32_t* src, std::int32_t* acc, std::size_t n) {
@@ -279,6 +322,10 @@ inline void relu_i16(std::int16_t* acc, std::size_t n) {
                                           const std::int16_t* acc,
                                           std::size_t n) {
     return scalar::dot_i16(w2, acc, n);
+}
+inline void add_widen_i16_i32(const std::int16_t* src, std::int32_t* acc,
+                              std::size_t n) {
+    scalar::add_widen_i16_i32(src, acc, n);
 }
 
 #endif

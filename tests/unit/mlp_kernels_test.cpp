@@ -96,3 +96,21 @@ TEST_CASE("saturating add clips at the int16 limits") {
     CHECK(acc[3] == -32768);
     CHECK(acc[4] == 50);      // no clip
 }
+
+TEST_CASE("widening add matches the scalar reference") {
+    std::mt19937 rng(13);
+    // Tail-exercising sizes plus the widths the KyTea tag scorer actually
+    // uses: nw=21 (jp model lev0 POS candidates) and nw=4 (per-word lev1).
+    constexpr std::size_t kWidenSizes[] = {1, 3, 4, 7, 8, 15, 16, 21, 63, 256};
+    for (const std::size_t n : kWidenSizes) {
+        CAPTURE(n);
+        const auto src = random_i16(rng, n);  // full int16 range
+        const auto base = random_i32(rng, n, -(1 << 26), 1 << 26);
+
+        auto expected = base;
+        auto actual = base;
+        kernels::scalar::add_widen_i16_i32(src.data(), expected.data(), n);
+        kernels::add_widen_i16_i32(src.data(), actual.data(), n);
+        CHECK(actual == expected);
+    }
+}

@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "segmentlib/kytea/automaton.h"
+#include "segmentlib/mlp/kernels.h"
 
 namespace segmentlib::kytea {
 
@@ -173,9 +174,12 @@ void add_tag_ngrams(const Automaton<FeatVec>& dict, std::span<const CharId> char
     dict.match(buf, [&](std::size_t end_pos, const FeatVec& vec) {
         int pos = static_cast<int>(end_pos) + offset;
         pos = (window * 2 - pos - 1) * nw;
-        for (int j = 0; j < nw; ++j) {
-            scores[static_cast<std::size_t>(j)] += vec[static_cast<std::size_t>(pos + j)];
-        }
+        // The hottest loop of tag prediction (~18% of tokenize as scalar,
+        // design.ja.md 9.2.1): a widening int16→int32 add the compiler does
+        // not auto-vectorize, so it uses the explicit SIMD kernel. Integer
+        // adds are exact — byte agreement is preserved by construction.
+        mlp::kernels::add_widen_i16_i32(vec.data() + pos, scores.data(),
+                                        static_cast<std::size_t>(nw));
     });
 }
 
@@ -189,10 +193,9 @@ void add_self_weights(const Automaton<FeatVec>& self_dict, std::span<const CharI
         return;
     }
     const int nw = static_cast<int>(scores.size());
-    const int base = feat_idx * nw;
-    for (int i = 0; i < nw; ++i) {
-        scores[static_cast<std::size_t>(i)] += (*entry)[static_cast<std::size_t>(base + i)];
-    }
+    mlp::kernels::add_widen_i16_i32(entry->data() + feat_idx * nw,
+                                    scores.data(),
+                                    static_cast<std::size_t>(nw));
 }
 
 // Dictionary-match (dict,candidate) pairs for a word (Kytea::getDictionaryMatches).
@@ -223,9 +226,9 @@ void add_tag_dict_weights(const TagFeatureLookup& look,
                           std::vector<Score>& scores, int nw) {
     if (exists.empty()) {
         if (!look.tag_unk_vector.empty()) {
-            for (int i = 0; i < nw; ++i) {
-                scores[static_cast<std::size_t>(i)] += look.tag_unk_vector[static_cast<std::size_t>(i)];
-            }
+            mlp::kernels::add_widen_i16_i32(look.tag_unk_vector.data(),
+                                            scores.data(),
+                                            static_cast<std::size_t>(nw));
         }
         return;
     }
@@ -234,10 +237,9 @@ void add_tag_dict_weights(const TagFeatureLookup& look,
     }
     for (const auto& [di, cand] : exists) {
         const int base = di * nw * nw + cand * nw;
-        for (int i = 0; i < nw; ++i) {
-            scores[static_cast<std::size_t>(i)] +=
-                look.tag_dict_vector[static_cast<std::size_t>(base + i)];
-        }
+        mlp::kernels::add_widen_i16_i32(look.tag_dict_vector.data() + base,
+                                        scores.data(),
+                                        static_cast<std::size_t>(nw));
     }
 }
 
@@ -307,9 +309,8 @@ void predict_word_tags(const Model& model, const EncodedText& enc,
             get_dictionary_matches(model, ent, 0, matches);  // KyTea hardcodes lev 0 here
             add_tag_dict_weights(look, matches, scores, nw);
         }
-        for (int j = 0; j < nw; ++j) {
-            scores[static_cast<std::size_t>(j)] += look.biases[static_cast<std::size_t>(j)];
-        }
+        mlp::kernels::add_widen_i16_i32(look.biases.data(), scores.data(),
+                                        static_cast<std::size_t>(nw));
         // Binary classifier: the second class's score is the negated first (prob)
         // or zero (margin). The top candidate is invariant to that choice, so the
         // margin form suffices for producing the winning string.
