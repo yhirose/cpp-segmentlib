@@ -452,7 +452,7 @@ SegmentLibMLP <version>\n
 
 - 内訳（in-processプロファイル）：encode（正規化+EGC分割）は3.0ms/7050文で無視でき、コストはスコア計算に集中。int16化＋NEONでスコア計算部は **1.9倍**（168.7ms→88.8ms）。
 - **int16再量子化の検証（I.3の枠組み）**：`kAccShift=9`（キャリブレーション点 2^22 → 2^13、int16内に4倍のヘッドルーム）。UD-GSD実モデルの dev 19,641境界＋train 270,383境界で **int32経路との判定反転 0件**、test set F1 も 97.91% で不変。int16 は `Model::load` の既定（`TablePrecision::Int16`）、int32 は検証用参照経路として残置（学習側リファレンスとのbit-exact契約はint32経路が担う）。
-- SIMDは NEON（AArch64、実機検証済み）／AVX2（x86、`-mavx2`時。Apple clang `-arch x86_64` でコンパイル検証のみ——x86実機での動作確認は未実施）／scalar（全プラットフォーム、テストのoracle）の3実装（`include/segmentlib/mlp/kernels.h`）。
+- SIMDは NEON（AArch64、実機検証済み）／AVX2（x86、`-mavx2`時）／scalar（全プラットフォーム、テストのoracle）の3実装（`include/segmentlib/mlp/kernels.h`）。**AVX2はCIで実機検証済み**（2026-07-12、GitHub Actions `ubuntu-24.04`ランナー実機でGCC 14 `-mavx2`ビルド＋`ctest`実行、`mlp_kernels_test.cpp`のscalar oracleとのbit一致テストがgreen。加えてWindows(MSVC `/arch:AVX2`)でも同様に実機green——2ツールチェーンで確認済み）。当初「Apple clang `-arch x86_64` でのコンパイル検証のみ」と記録していたが、CI整備（`.github/workflows/ci.yml`）によりこの制約は解消済み。
 
 **クロスジャンル一般化の再計測（2026-07-12、GSD学習済みモデルをそのまま別ジャンルへ適用）**：初回実測は GSD（Wikipedia由来）の test 543文のみで、精度差0.7ptが小テストセットのブレか代表値かが未確認だった。そこで**別ジャンルの out-of-domain テストセット** UD_Japanese-PUD（`UniversalDependencies/UD_Japanese-PUD`、CC BY-SA 4.0、news/Wikipedia対訳、1000文・27,788境界。GSDと同じ UniDic 短単位基準で SUW 分割・XPOS・UnidicInfo 読みを持つ）を追加し、**GSDで学習した `kytea.mod`／`mlp.mod` を再学習せずに評価**した。取得は `scripts/fetch_ud_pud_corpus.sh`（変換は GSD 用 `convert_ud_gsd_corpus.py` を UD日本語共通フォーマットとしてそのまま再利用）。
 
