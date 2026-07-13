@@ -44,7 +44,7 @@ echo
 K_OUT="$(mktemp)"; O_OUT="$(mktemp)"; V_OUT="$(mktemp)"
 trap 'rm -f "$K_OUT" "$O_OUT" "$V_OUT"' EXIT
 "$KYTEA" -model "$KMODEL" -notags < "$CORPUS" > "$K_OUT" 2>/dev/null
-"$OURS" predict --notags --model "$KMODEL" < "$CORPUS" > "$O_OUT" 2>/dev/null
+"$OURS" predict --model "$KMODEL" < "$CORPUS" > "$O_OUT" 2>/dev/null
 "$VAPORETTO" --model "$VMODEL" < "$CORPUS" > "$V_OUT" 2>/dev/null
 gate() {
     local total diff pct

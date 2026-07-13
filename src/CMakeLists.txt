@@ -5,7 +5,6 @@ add_library(segmentlib STATIC
     kytea/char_table.cpp
     kytea/model.cpp
     kytea/scorer.cpp
-    kytea/tag_scorer.cpp
     kytea/kytea_backend.cpp
     mlp/vocab.cpp
     mlp/dictionary.cpp

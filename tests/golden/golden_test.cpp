@@ -55,53 +55,6 @@ TEST_CASE("KyTea byte-exact parity on the golden corpus") {
         append_full_line(*segments, line, got);
 
         CHECK_MESSAGE(got == want, "line " << line_no << ": got [" << got << "] want [" << want << "]");
-
-        // The boundaries-only path (tokenize_boundaries + append_boundary_line,
-        // what `predict --boundaries-only` uses) must produce byte-identical
-        // segmentation output — the same words, from the tag-free fast path.
-        auto cuts = segmenter->tokenize_boundaries(line);
-        REQUIRE(cuts.has_value());
-        std::string got_b;
-        append_boundary_line(*cuts, line, got_b);
-        CHECK_MESSAGE(got_b == want, "boundary line " << line_no << ": got [" << got_b << "]");
-    }
-    CHECK_FALSE(std::getline(expected, want));  // no extra expected lines
-}
-
-// Byte-for-byte parity with KyTea's default (tagged) output — surface,
-// part-of-speech, and reading for every word, including unknown-word readings
-// estimated by the subword language model (stage B). The reference in
-// expected_tags.txt was produced by `kytea -model jp-0.4.7-5.mod`. (The corpus
-// avoids astral-plane characters, whose word segmentation intentionally diverges
-// from KyTea's buggy findType; see char_table.h.)
-TEST_CASE("KyTea tag-prediction parity (surface/POS/reading, byte-exact)") {
-    const std::filesystem::path model_path{SEGMENTLIB_MODEL_PATH};
-    if (model_path.empty() || !std::filesystem::exists(model_path)) {
-        return;  // model absent: covered by the skip message in the WS parity case
-    }
-    auto segmenter = Segmenter::load(model_path);
-    REQUIRE(segmenter.has_value());
-
-    const std::filesystem::path dir{SEGMENTLIB_GOLDEN_DIR};
-    std::ifstream input(dir / "input.txt");
-    std::ifstream expected(dir / "expected_tags.txt");
-    REQUIRE(input.good());
-    REQUIRE(expected.good());
-
-    std::string line;
-    std::string want;
-    std::string got;
-    std::size_t line_no = 0;
-    while (std::getline(input, line)) {
-        ++line_no;
-        REQUIRE_MESSAGE(std::getline(expected, want), "expected_tags.txt shorter than input.txt");
-
-        auto segments = segmenter->tokenize(line);
-        REQUIRE(segments.has_value());
-        got.clear();
-        append_tagged_line(*segments, line, got);
-
-        CHECK_MESSAGE(got == want, "line " << line_no << ": got [" << got << "] want [" << want << "]");
     }
     CHECK_FALSE(std::getline(expected, want));  // no extra expected lines
 }

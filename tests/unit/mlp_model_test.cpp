@@ -155,26 +155,22 @@ TEST_CASE("scorer reproduces the hand computation, PAD and dict included") {
     CHECK(score_boundaries(*model, *enc4).empty());
 }
 
-TEST_CASE("MlpBackend turns scores into boundaries and segments") {
+TEST_CASE("MlpBackend turns scores into segments") {
     const std::vector<std::byte> bytes = tiny_model_bytes();
     auto model = Model::load_from_bytes(bytes, TablePrecision::Int32);
     REQUIRE(model.has_value());
     const MlpBackend backend(std::move(*model));
 
-    const auto cuts = backend.tokenize_boundaries("ああ");
-    REQUIRE(cuts.has_value());
-    CHECK(*cuts == Boundaries{3});  // ああ splits between the two あ
-
     const auto segments = backend.tokenize("ああ");
     REQUIRE(segments.has_value());
-    REQUIRE(segments->size() == 2);
-    CHECK((*segments)[0] == Segment{0, 3, {}});
-    CHECK((*segments)[1] == Segment{3, 6, {}});
+    REQUIRE(segments->size() == 2);  // ああ splits between the two あ
+    CHECK((*segments)[0] == std::pair<std::size_t, std::size_t>{0, 3});
+    CHECK((*segments)[1] == std::pair<std::size_t, std::size_t>{3, 6});
 
     const auto none = backend.tokenize("あい");
     REQUIRE(none.has_value());
-    REQUIRE(none->size() == 1);  // no cut: one segment, tags empty
-    CHECK((*none)[0] == Segment{0, 6, {}});
+    REQUIRE(none->size() == 1);  // no cut: one segment
+    CHECK((*none)[0] == std::pair<std::size_t, std::size_t>{0, 6});
 
     const auto empty = backend.tokenize("");
     REQUIRE(empty.has_value());
@@ -221,9 +217,10 @@ TEST_CASE("Segmenter::load auto-detects the MLP signature") {
     }
     const auto segmenter = Segmenter::load(path);
     REQUIRE(segmenter.has_value());
-    const auto cuts = segmenter->tokenize_boundaries("ああ");
-    REQUIRE(cuts.has_value());
-    CHECK(*cuts == Boundaries{3});
+    const auto segments = segmenter->tokenize("ああ");
+    REQUIRE(segments.has_value());
+    REQUIRE(segments->size() == 2);
+    CHECK((*segments)[0] == std::pair<std::size_t, std::size_t>{0, 3});
 
     // The MLP-forced loader accepts it too; the KyTea-forced loader must not.
     CHECK(Segmenter::load_mlp(path).has_value());

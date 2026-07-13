@@ -140,12 +140,8 @@ TEST_CASE("end to end: train, export, load, tokenize") {
     const MlpBackend mlp(std::move(*model));
 
     // かき|あい|うえお: word joints at bytes 6 and 12.
-    const auto cuts = mlp.tokenize_boundaries("かきあいうえお");
-    REQUIRE(cuts.has_value());
-    CHECK(*cuts == Boundaries{6, 12});
-
     const auto segments = mlp.tokenize("かきあいうえお");
     REQUIRE(segments.has_value());
     REQUIRE(segments->size() == 3);
-    CHECK((*segments)[1] == Segment{6, 12, {}});
+    CHECK((*segments)[1] == std::pair<std::size_t, std::size_t>{6, 12});
 }

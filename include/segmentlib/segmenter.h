@@ -33,19 +33,10 @@ public:
         return std::visit([&](const auto& b) { return b.tokenize(text); }, backend_);
     }
 
-    [[nodiscard]] std::expected<Boundaries, Error> tokenize_boundaries(std::string_view text) const {
-        return std::visit([&](const auto& b) { return b.tokenize_boundaries(text); }, backend_);
-    }
-
     // Tokenizes many inputs in parallel; result[i] corresponds to texts[i].
     // Inputs are independent and the model is immutable, so throughput scales
     // near-linearly with cores. `threads == 0` uses hardware_concurrency().
     [[nodiscard]] std::vector<std::expected<Segments, Error>> tokenize_all(
-        std::span<const std::string_view> texts, unsigned threads = 0) const;
-
-    // Word-boundaries-only counterpart of tokenize_all (no tag prediction), for
-    // the fast segmentation-only path. result[i] corresponds to texts[i].
-    [[nodiscard]] std::vector<std::expected<Boundaries, Error>> tokenize_boundaries_all(
         std::span<const std::string_view> texts, unsigned threads = 0) const;
 
 private:

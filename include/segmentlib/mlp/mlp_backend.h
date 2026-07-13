@@ -10,18 +10,13 @@
 namespace segmentlib::mlp {
 
 // The MLP segmentation backend (mlp_module_design.ja.md 2.6): same shape as
-// kytea::KyteaBackend. The MLP has no tag prediction, so tokenize simply
-// converts boundaries into Segments with empty tag lists.
+// kytea::KyteaBackend. Word segmentation only.
 class MlpBackend {
 public:
     explicit MlpBackend(Model model) noexcept : model_(std::move(model)) {}
 
     [[nodiscard]] std::expected<Segments, Error>
     tokenize(std::string_view text) const;
-
-    // Word boundaries only: byte offsets of the cut points between words.
-    [[nodiscard]] std::expected<Boundaries, Error>
-    tokenize_boundaries(std::string_view text) const;
 
     [[nodiscard]] const Model& model() const noexcept { return model_; }
 

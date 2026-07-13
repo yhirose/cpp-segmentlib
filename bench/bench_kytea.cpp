@@ -1,6 +1,6 @@
 // In-process inference microbenchmark for KyTea itself, via libkytea.
 // Mirrors bench_segment: load once, then time calculateWS (word segmentation)
-// and calculateTags (POS + reading, one call per tag level) over a corpus.
+// over a corpus.
 //
 //   bench_kytea <model> <corpus> [iterations]
 
@@ -47,8 +47,6 @@ int main(int argc, char** argv) {
         }
     }
 
-    const int num_tags = analyzer.getConfig()->getNumTags();
-
     auto run_ws = [&]() -> std::size_t {
         std::size_t sink = 0;
         for (const auto& l : lines) {
@@ -61,25 +59,7 @@ int main(int argc, char** argv) {
         return sink;
     };
 
-    // Segmentation + POS + reading: calculateWS, then calculateTags per level
-    // (mirrors bench_segment's tokenize(), which does the same two-phase work).
-    auto run_tags = [&]() -> std::size_t {
-        std::size_t sink = 0;
-        for (const auto& l : lines) {
-            KyteaString surface = util->mapString(l);
-            KyteaString norm = util->normalize(surface);
-            KyteaSentence sent(surface, norm);
-            analyzer.calculateWS(sent);
-            for (int lev = 0; lev < num_tags; ++lev) {
-                analyzer.calculateTags(sent, lev);
-            }
-            sink += sent.words.size();
-        }
-        return sink;
-    };
-
-    std::size_t sink = run_ws();    // warmup
-    sink += run_tags();             // warmup
+    std::size_t sink = run_ws();  // warmup
 
     double ws_best_ms = 1e300;
     for (int it = 0; it < iterations; ++it) {
@@ -89,23 +69,11 @@ int main(int argc, char** argv) {
         ws_best_ms = std::min(ws_best_ms, std::chrono::duration<double, std::milli>(t1 - t0).count());
     }
 
-    double tags_best_ms = 1e300;
-    for (int it = 0; it < iterations; ++it) {
-        const auto t0 = std::chrono::steady_clock::now();
-        sink += run_tags();
-        const auto t1 = std::chrono::steady_clock::now();
-        tags_best_ms = std::min(tags_best_ms, std::chrono::duration<double, std::milli>(t1 - t0).count());
-    }
-
     const double ws_mcps = static_cast<double>(chars) / (ws_best_ms / 1000.0) / 1e6;
-    const double tags_mcps = static_cast<double>(chars) / (tags_best_ms / 1000.0) / 1e6;
     std::printf("model load:        %.0f ms\n", load_ms);
     std::printf("corpus:            %zu lines, %zu chars (codepoints)\n", lines.size(), chars);
     std::printf("best pass:         %.1f ms  (%d iterations)\n", ws_best_ms, iterations);
     std::printf("inference speed:   %.2f M chars/sec\n", ws_mcps);
-    std::printf("tags best pass:    %.1f ms  (%d iterations, %d tag levels)\n", tags_best_ms,
-                iterations, num_tags);
-    std::printf("tags speed:        %.2f M chars/sec\n", tags_mcps);
     std::printf("(sink=%zu)\n", sink);
     return 0;
 }

@@ -17,8 +17,6 @@ namespace {
 
 struct Options {
     std::string_view model_path;
-    bool boundaries_only = false;
-    bool no_tags = false;  // suppress tag prediction (surface only)
     unsigned threads = 0;  // 0 = hardware_concurrency
     bool ok = true;
 };
@@ -29,10 +27,6 @@ Options parse(std::span<const std::string_view> args) {
         const std::string_view a = args[i];
         if (a == "--model" && i + 1 < args.size()) {
             opt.model_path = args[++i];
-        } else if (a == "--boundaries-only") {
-            opt.boundaries_only = true;
-        } else if (a == "--notags") {
-            opt.no_tags = true;
         } else if (a == "--threads" && i + 1 < args.size()) {
             const std::string_view v = args[++i];
             unsigned n = 0;
@@ -55,17 +49,10 @@ Options parse(std::span<const std::string_view> args) {
     return opt;
 }
 
-// Writes a tagged segmented line (surface/POS/reading) plus a newline.
-void write_tagged(const Segments& segments, std::string_view line, std::string& out) {
+// Writes a segmented line (surface words) plus a newline.
+void write_segments(const Segments& segments, std::string_view line, std::string& out) {
     out.clear();
-    append_tagged_line(segments, line, out);
-    out.push_back('\n');
-}
-
-// Writes a segmentation-only line (surface words) plus a newline.
-void write_boundaries(const Boundaries& cuts, std::string_view line, std::string& out) {
-    out.clear();
-    append_boundary_line(cuts, line, out);
+    append_full_line(segments, line, out);
     out.push_back('\n');
 }
 
@@ -84,7 +71,6 @@ int run_predict(std::span<const std::string_view> args) {
     }
 
     std::ios::sync_with_stdio(false);
-    const bool segment_only = opt.boundaries_only || opt.no_tags;
 
     // Process the input in blocks: read up to kBlock lines, segment them in
     // parallel, then write the results in input order. Blocking keeps peak
@@ -106,30 +92,15 @@ int run_predict(std::span<const std::string_view> args) {
         }
 
         views.assign(lines.begin(), lines.end());
-        // --boundaries-only and --notags both suppress tags; take the faster
-        // tag-free path (tokenize_boundaries) rather than computing tags to drop.
-        if (segment_only) {
-            const auto results = segmenter->tokenize_boundaries_all(views, opt.threads);
-            for (std::size_t i = 0; i < results.size(); ++i) {
-                if (!results[i]) {
-                    std::fflush(stdout);
-                    std::println(stderr, "predict: {}", results[i].error().message);
-                    return 1;
-                }
-                write_boundaries(*results[i], lines[i], out);
-                std::fwrite(out.data(), 1, out.size(), stdout);
+        const auto results = segmenter->tokenize_all(views, opt.threads);
+        for (std::size_t i = 0; i < results.size(); ++i) {
+            if (!results[i]) {
+                std::fflush(stdout);
+                std::println(stderr, "predict: {}", results[i].error().message);
+                return 1;
             }
-        } else {
-            const auto results = segmenter->tokenize_all(views, opt.threads);
-            for (std::size_t i = 0; i < results.size(); ++i) {
-                if (!results[i]) {
-                    std::fflush(stdout);
-                    std::println(stderr, "predict: {}", results[i].error().message);
-                    return 1;
-                }
-                write_tagged(*results[i], lines[i], out);
-                std::fwrite(out.data(), 1, out.size(), stdout);
-            }
+            write_segments(*results[i], lines[i], out);
+            std::fwrite(out.data(), 1, out.size(), stdout);
         }
     }
     return 0;

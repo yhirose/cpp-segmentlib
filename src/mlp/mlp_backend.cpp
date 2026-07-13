@@ -26,40 +26,27 @@ Scratch& scratch() {
 
 }  // namespace
 
-std::expected<Boundaries, Error>
-MlpBackend::tokenize_boundaries(std::string_view text) const {
+std::expected<Segments, Error> MlpBackend::tokenize(std::string_view text) const {
     Scratch& s = scratch();
     if (auto encoded = model_.vocab().encode_into(text, s.enc); !encoded) {
         return std::unexpected(encoded.error());
-    }
-    score_boundaries_into(model_, s.enc, s.ws, s.scores);
-    Boundaries cuts;
-    for (std::size_t i = 0; i < s.scores.size(); ++i) {
-        if (s.scores[i] > 0) {
-            // Boundary i sits after EGC i: the byte offset where EGC i+1
-            // starts in the original input.
-            cuts.push_back(s.enc.offsets[i + 1]);
-        }
-    }
-    return cuts;
-}
-
-std::expected<Segments, Error> MlpBackend::tokenize(std::string_view text) const {
-    const auto cuts = tokenize_boundaries(text);
-    if (!cuts) {
-        return std::unexpected(cuts.error());
     }
     Segments segments;
     if (text.empty()) {
         return segments;
     }
-    segments.reserve(cuts->size() + 1);
+    score_boundaries_into(model_, s.enc, s.ws, s.scores);
     std::size_t start = 0;
-    for (const std::size_t cut : *cuts) {
-        segments.push_back(Segment{start, cut, {}});
-        start = cut;
+    for (std::size_t i = 0; i < s.scores.size(); ++i) {
+        if (s.scores[i] > 0) {
+            // Boundary i sits after EGC i: the byte offset where EGC i+1
+            // starts in the original input.
+            const std::size_t cut = s.enc.offsets[i + 1];
+            segments.emplace_back(start, cut);
+            start = cut;
+        }
     }
-    segments.push_back(Segment{start, text.size(), {}});
+    segments.emplace_back(start, text.size());
     return segments;
 }
 

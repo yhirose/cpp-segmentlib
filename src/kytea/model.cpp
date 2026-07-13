@@ -41,15 +41,11 @@ void skip_featvec(BinaryReader& r) {
     r.skip(std::size_t{n} * sizeof(FeatVal));
 }
 
-// Reads a KyteaString (length-prefixed array of char ids) as raw ids. Tag
-// candidate strings are stored this way; the caller decodes them to UTF-8.
-std::vector<CharId> read_kytea_string(BinaryReader& r) {
+// Advances past a KyteaString (length-prefixed array of char ids) without
+// materializing it. Tag candidate strings are stored this way.
+void skip_kytea_string(BinaryReader& r) {
     const auto len = r.read<std::uint32_t>();
-    std::vector<CharId> s(len);
-    for (auto& c : s) {
-        c = r.read<CharId>();
-    }
-    return s;
+    r.skip(std::size_t{len} * kCharBytes);
 }
 
 // Advances past a Dictionary<Entry> without materializing it. Used for the
@@ -74,119 +70,86 @@ void skip_dictionary(BinaryReader& r, const std::function<void(BinaryReader&)>& 
     }
 }
 
-// Reads a FeatureLookup, retaining the tag-prediction members. The layout
-// matches KyTea's readFeatureLookup exactly; the word-segmentation-only
-// dictVector is read but discarded. `active == 0` means no lookup.
-std::optional<TagFeatureLookup> read_tag_feature_lookup(BinaryReader& r) {
+// Advances past a FeatureLookup (the classifier attached to a KyteaModel).
+// `active == 0` means no lookup and nothing further to skip.
+void skip_feature_lookup(BinaryReader& r) {
     const auto active = r.read<std::uint8_t>();
     if (active == 0) {
-        return std::nullopt;
+        return;
     }
-    TagFeatureLookup fl;
-    fl.char_dict = Automaton<FeatVec>::read(r, read_featvec);   // charDict
-    fl.type_dict = Automaton<FeatVec>::read(r, read_featvec);   // typeDict
-    fl.self_dict = Automaton<FeatVec>::read(r, read_featvec);   // selfDict
-    skip_featvec(r);                                            // dictVector (WS only)
-    fl.biases = read_featvec(r);                                // biases
-    fl.tag_dict_vector = read_featvec(r);                       // tagDictVector
-    fl.tag_unk_vector = read_featvec(r);                        // tagUnkVector
-    return fl;
+    skip_dictionary(r, skip_featvec);  // charDict
+    skip_dictionary(r, skip_featvec);  // typeDict
+    skip_dictionary(r, skip_featvec);  // selfDict
+    skip_featvec(r);                  // dictVector (WS only)
+    skip_featvec(r);                  // biases
+    skip_featvec(r);                  // tagDictVector
+    skip_featvec(r);                  // tagUnkVector
 }
 
-// Reads a KyteaModel (classifier), retaining what tag prediction needs. A class
-// count of 0 means "no model" (nullopt). numWeights is derived exactly as
-// KyteaModel::setNumClasses does at read time (see TagModel::num_weights).
-std::optional<TagModel> read_tag_model(BinaryReader& r) {
+// Advances past a KyteaModel (classifier). A class count of 0 means "no
+// model" and nothing further to skip.
+void skip_tag_model(BinaryReader& r) {
     const auto num_classes = r.read<std::int32_t>();
     if (num_classes == 0) {
-        return std::nullopt;
+        return;
     }
-    TagModel m;
     discard<std::uint8_t>(r);  // solver
     r.skip(std::size_t{static_cast<std::uint32_t>(num_classes)} * sizeof(std::int32_t));  // labels
     discard_bool(r);           // bias flag
-    m.multiplier = r.read<double>();
-    m.num_weights = (num_classes == 2) ? 1 : num_classes;
-    m.lookup = read_tag_feature_lookup(r);
-    return m;
+    discard<double>(r);        // multiplier
+    skip_feature_lookup(r);
 }
 
-// Reads one dictionary word entry, keeping the D-feature fields and the per-word
-// tag information (candidate strings decoded to UTF-8 via `chars`, dictionary
-// bitmasks, and the usually-absent per-word tag models).
-WordEntry read_word_entry(BinaryReader& r, int num_tags, const CharTable& chars) {
+// Reads one dictionary word entry, keeping only the D-feature fields; the
+// per-word tag information (candidate strings, dictionary bitmasks, per-word
+// tag models) is skipped.
+WordEntry read_word_entry(BinaryReader& r, int num_tags) {
     WordEntry e;
     e.char_length = r.read<std::uint32_t>();  // word length in characters...
     r.skip(std::size_t{e.char_length} * kCharBytes);  // ...then the characters
-    e.tags.resize(num_tags);
-    e.tag_in_dicts.resize(num_tags);
-    e.tag_mods.resize(num_tags);
     for (int lev = 0; lev < num_tags; ++lev) {
         const auto n_cands = r.read<std::uint32_t>();
-        e.tags[lev].reserve(n_cands);
-        e.tag_in_dicts[lev].reserve(n_cands);
         for (std::uint32_t j = 0; j < n_cands; ++j) {
-            e.tags[lev].push_back(chars.decode(read_kytea_string(r)));  // tag candidate
-            e.tag_in_dicts[lev].push_back(r.read<std::uint8_t>());      // tagInDicts
+            skip_kytea_string(r);        // tag candidate
+            discard<std::uint8_t>(r);    // tagInDicts
         }
     }
     e.in_dict = r.read<std::uint8_t>();
     for (int lev = 0; lev < num_tags; ++lev) {
-        e.tag_mods[lev] = read_tag_model(r);  // per-word tag model (usually absent)
+        skip_tag_model(r);  // per-word tag model (usually absent)
     }
     return e;
 }
 
-// KyTea's NEG_INFINITY sentinel (model-io.cpp): language-model entries written
-// with this exact value are absent and must not be inserted into the maps.
-constexpr double kNegInfinity = -999.0;
-
-// Reads one subword-dictionary entry (KyTea's readEntry<ProbTagEntry>). The
-// surface word is consumed only for its length (the automaton keys the entry);
-// candidate readings are kept as raw char ids for the char-id language model.
-ProbSubwordEntry read_prob_subword_entry(BinaryReader& r, int num_tags) {
-    ProbSubwordEntry e;
-    e.word_length = static_cast<std::uint32_t>(read_kytea_string(r).size());  // word (key)
-    e.tags.resize(num_tags);
-    e.probs.resize(num_tags);
+// Advances past one subword-dictionary entry (KyTea's ProbTagEntry).
+void skip_prob_subword_entry(BinaryReader& r, int num_tags) {
+    skip_kytea_string(r);  // word (key)
     for (int lev = 0; lev < num_tags; ++lev) {
         const auto n_cand = r.read<std::uint32_t>();
-        e.tags[lev].resize(n_cand);
-        e.probs[lev].resize(n_cand);
         for (std::uint32_t j = 0; j < n_cand; ++j) {
-            e.tags[lev][j] = read_kytea_string(r);  // reading (raw char ids)
-            e.probs[lev][j] = r.read<double>();
+            skip_kytea_string(r);  // reading (raw char ids)
+            discard<double>(r);    // probability
         }
     }
-    return e;
 }
 
-// Reads one KyteaLM (KyTea's readLM). n == 0 marks an absent model. Each entry
-// is a key (raw char ids) plus a probability, and — unless the key is already
-// the full n-gram length — a fallback weight; NEG_INFINITY values are skipped.
-KyteaLM read_lm(BinaryReader& r) {
-    KyteaLM lm;
-    lm.n = r.read<std::uint32_t>();
-    if (lm.n == 0) {
-        return lm;  // absent language model
+// Advances past one KyteaLM (a per-tag-level reading language model). `n ==
+// 0` marks an absent model, with nothing further to skip.
+void skip_lm(BinaryReader& r) {
+    const auto n = r.read<std::uint32_t>();
+    if (n == 0) {
+        return;
     }
-    lm.vocab_size = r.read<std::uint32_t>();
+    discard<std::uint32_t>(r);  // vocabSize
     auto n_entries = r.read<std::uint32_t>();
     while (n_entries-- != 0) {
-        const std::vector<CharId> key = read_kytea_string(r);
-        const std::u16string k(key.begin(), key.end());
-        const double prob = r.read<double>();
-        if (prob != kNegInfinity) {
-            lm.probs.emplace(k, prob);
-        }
-        if (key.size() != lm.n) {
-            const double fallback = r.read<double>();
-            if (fallback != kNegInfinity) {
-                lm.fallbacks.emplace(k, fallback);
-            }
+        const auto key_len = r.read<std::uint32_t>();
+        r.skip(std::size_t{key_len} * kCharBytes);  // key
+        discard<double>(r);                          // probability
+        if (key_len != n) {
+            discard<double>(r);  // fallback weight
         }
     }
-    return lm;
 }
 
 struct Header {
@@ -269,34 +232,28 @@ Model::Parts Model::parse(BinaryReader& r) {
     skip_featvec(r);                           // tagDictVector
     skip_featvec(r);                           // tagUnkVector
 
-    // --- global tag models: numTags x (word list + KyteaModel) ---
-    std::vector<std::vector<std::string>> global_tags(cfg.num_tags);
-    std::vector<std::optional<TagModel>> global_mods(cfg.num_tags);
+    // --- global tag models: numTags x (word list + KyteaModel), skipped ---
     for (int i = 0; i < cfg.num_tags; ++i) {
         const auto n_words = r.read<std::uint32_t>();  // tag word list
-        global_tags[i].reserve(n_words);
         for (std::uint32_t j = 0; j < n_words; ++j) {
-            global_tags[i].push_back(chars.decode(read_kytea_string(r)));
+            skip_kytea_string(r);
         }
-        global_mods[i] = read_tag_model(r);
+        skip_tag_model(r);
     }
 
     // --- word dictionary (needed for the D features) ---
     const int num_tags = cfg.num_tags;
     Automaton<WordEntry> word_dict =
-        Automaton<WordEntry>::read(r, [num_tags, &chars](BinaryReader& rr) {
-            return read_word_entry(rr, num_tags, chars);
+        Automaton<WordEntry>::read(r, [num_tags](BinaryReader& rr) {
+            return read_word_entry(rr, num_tags);
         });
 
-    // --- subword dictionary (ProbTagEntry) + per-level reading LMs ---
-    Automaton<ProbSubwordEntry> subword_dict =
-        Automaton<ProbSubwordEntry>::read(r, [num_tags](BinaryReader& rr) {
-            return read_prob_subword_entry(rr, num_tags);
-        });
-    std::vector<KyteaLM> subword_models;
-    subword_models.reserve(num_tags);
+    // --- subword dictionary (ProbTagEntry) + per-level reading LMs, skipped ---
+    skip_dictionary(r, [num_tags](BinaryReader& rr) {
+        skip_prob_subword_entry(rr, num_tags);
+    });
     for (int i = 0; i < num_tags; ++i) {
-        subword_models.push_back(read_lm(r));
+        skip_lm(r);
     }
 
     return Model::Parts{
@@ -308,10 +265,6 @@ Model::Parts Model::parse(BinaryReader& r) {
         .dict_vector = std::move(dict_vector),
         .biases = std::move(biases),
         .word_dict = std::move(word_dict),
-        .global_tags = std::move(global_tags),
-        .global_mods = std::move(global_mods),
-        .subword_dict = std::move(subword_dict),
-        .subword_models = std::move(subword_models),
     };
 }
 

@@ -113,10 +113,4 @@ std::vector<std::expected<Segments, Error>> Segmenter::tokenize_all(
                                [this](std::string_view t) { return tokenize(t); });
 }
 
-std::vector<std::expected<Boundaries, Error>> Segmenter::tokenize_boundaries_all(
-    std::span<const std::string_view> texts, unsigned threads) const {
-    return run_batch<Boundaries>(texts, threads,
-                                 [this](std::string_view t) { return tokenize_boundaries(t); });
-}
-
 }  // namespace segmentlib

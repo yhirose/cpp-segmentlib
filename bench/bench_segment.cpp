@@ -5,13 +5,10 @@
 // inference cost of the library — the number a cross-tool CLI comparison cannot
 // cleanly obtain for the other tools.
 //
-// The headline "inference speed" figure uses tokenize_boundaries() (word
-// segmentation only, no tag/reading prediction) to stay apples-to-apples with
-// bench_kytea.cpp (calculateWS only) and Vaporetto (segmentation only, no tag
-// prediction) — see docs/design.ja.md 10.1's "conditions fixed" methodology.
-// A second, separate figure reports tokenize() (segmentation + POS + reading,
-// stage A-2/B), which the other two tools have no equivalent for, so it is
-// not compared against them.
+// The headline "inference speed" figure uses tokenize() (word segmentation
+// only; this library predicts no tags) to stay apples-to-apples with
+// bench_kytea.cpp (calculateWS only) and Vaporetto (segmentation only) — see
+// docs/design.ja.md 10.1's "conditions fixed" methodology.
 //
 //   bench_segment <model> <corpus> [iterations]
 
@@ -83,7 +80,7 @@ int main(int argc, char** argv) {
     // Warm up caches and branch predictors.
     std::size_t sink = 0;
     for (const auto& l : lines) {
-        auto s = segmenter->tokenize_boundaries(l);
+        auto s = segmenter->tokenize(l);
         if (s) sink += s->size();
     }
 
@@ -91,7 +88,7 @@ int main(int argc, char** argv) {
     for (int it = 0; it < iterations; ++it) {
         const auto t0 = std::chrono::steady_clock::now();
         for (const auto& l : lines) {
-            auto s = segmenter->tokenize_boundaries(l);
+            auto s = segmenter->tokenize(l);
             if (s) sink += s->size();
         }
         const auto t1 = std::chrono::steady_clock::now();
@@ -101,34 +98,14 @@ int main(int argc, char** argv) {
     const double chars_per_sec = static_cast<double>(chars) / (best_ms / 1000.0);
     std::println("model load:        {:.0f} ms", load_ms);
     std::println("corpus:            {} lines, {} chars (codepoints)", lines.size(), chars);
-    std::println("best pass (WS only, tokenize_boundaries): {:.1f} ms  ({} iterations)", best_ms,
-                 iterations);
+    std::println("best pass (tokenize): {:.1f} ms  ({} iterations)", best_ms, iterations);
     std::println("inference speed:   {:.2f} M chars/sec", chars_per_sec / 1e6);
 
-    // Tag prediction (segmentation + POS + reading, stage A-2/B). Not
-    // apples-to-apples with the other tools; reported separately for reference.
-    double tag_best_ms = 1e300;
-    for (int it = 0; it < iterations; ++it) {
-        const auto t0 = std::chrono::steady_clock::now();
-        for (const auto& l : lines) {
-            auto s = segmenter->tokenize(l);
-            if (s) sink += s->size();
-        }
-        const auto t1 = std::chrono::steady_clock::now();
-        tag_best_ms = std::min(tag_best_ms, std::chrono::duration<double, std::milli>(t1 - t0).count());
-    }
-    const double tag_chars_per_sec = static_cast<double>(chars) / (tag_best_ms / 1000.0);
-    std::println("\n(reference, not comparable to KyTea/Vaporetto below) tag prediction "
-                 "(tokenize): {:.1f} ms  {:.2f} M chars/sec",
-                 tag_best_ms, tag_chars_per_sec / 1e6);
-
     // Parallel throughput via the batch API, across a few thread counts.
-    // tokenize_all() has no boundaries-only variant, so this includes tag
-    // prediction too (segmentlib-only figure; not compared to KyTea/Vaporetto).
     std::vector<std::string_view> views(lines.begin(), lines.end());
     const std::span<const std::string_view> texts{views};
     const unsigned hw = std::max(1u, std::thread::hardware_concurrency());
-    std::println("\nparallel (tokenize_all, tag prediction included, {} hw threads):", hw);
+    std::println("\nparallel (tokenize_all, {} hw threads):", hw);
     double single_ms = 0.0;
     for (const unsigned t : {1u, 2u, 4u, hw}) {
         double best = 1e300;

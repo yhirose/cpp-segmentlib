@@ -133,6 +133,8 @@ KyTea <version> <T|B> <encoding>
 5. **サブワード辞書**：`Dictionary<ProbTagEntry>`（読み推定などの部分文字列確率用）
 6. **言語モデル（LM）**：`numTags`個ぶん、`KyteaLM`（サブワードのn-gram言語モデル）
 
+**本ライブラリは分かち書き専用（タグ推定は行わない、10節で決定）**。上記6セクションのうちWSに必要なのは1（`numTags`/`do_tags`はセクション3・単語辞書エントリ内のタグ情報の**バイト長を知るためだけに**必要）・2・4の一部（`char_length`/`in_dict`のみ）で、3・5・6と単語辞書エントリ内のタグ候補・per-wordタグモデルは**ファイル上のバイト列としては存在するが、値として保持せず読み飛ばす**（`model.cpp`の`skip_*`系関数）。以下の記述はモデルファイル自体の仕様（不変）であり、本ライブラリの実装がどこを保持しどこを読み飛ばすかは`model.h`/`model.cpp`のコメントを参照。
+
 **`KyteaModel`（分類器1個）のシリアライズ**
 
 - クラス数（`int32_t`。0または2未満なら「モデルなし」を意味しそこで終了）
@@ -605,15 +607,10 @@ word1/tag0a&tag0b/tag1a word2/tag0 word3 ...
 
 ### 6.2 型
 
-```cpp
-struct Segment {
-    std::size_t start;                 // UTF-8バイトオフセット（開始、含む）
-    std::size_t end;                   // UTF-8バイトオフセット（終了、含まない）
-    std::vector<std::string_view> tags; // 読み・品詞等のタグ（タグ推定を行わない場合は空）
-};
+本ライブラリは分かち書き専用（タグ推定は行わない、10節で決定）。`Segments`は語スパン（開始・終了のUTF-8バイトオフセット）のペア列という最小の形に定まる——専用の`Segment`構造体は導入せず、`Boundaries`同様に生の型のエイリアスとする。
 
-using Segments = std::vector<Segment>;
-using Boundaries = std::vector<std::size_t>; // 分かち書きのみの場合の境界オフセット列
+```cpp
+using Segments = std::vector<std::pair<std::size_t, std::size_t>>;  // (start, end) のペア列
 
 enum class ErrorCode {
     InvalidUtf8,
@@ -640,16 +637,13 @@ public:
     static std::expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
     static std::expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
 
-    // 分かち書き + タグ推定
+    // 分かち書き
     std::expected<Segments, Error> tokenize(std::string_view text) const;
-
-    // 分かち書きのみ（タグ推定を行わない高速パス）
-    std::expected<Boundaries, Error> tokenize_boundaries(std::string_view text) const;
 };
 ```
 
-- `tokenize()` と `tokenize_boundaries()` を型レベルで分けているのは、タグ推定用のストレージ確保をスキップできる軽量パスを明示的に提供するため。
-- 空文字列の入力は「エラーではなく空の結果」として扱う（`Segments{}` / `Boundaries{}`）。`Error`はUTF-8不正やモデル未読込・未対応形式などの実際の異常系のみに使う。
+- 分かち書きのみを行う`tokenize()`一本に絞られている。以前は「分かち書き＋タグ推定」の`tokenize()`と「分かち書きのみの高速パス」の`tokenize_boundaries()`を型レベルで分けていたが、タグ推定を廃止した結果その速度差の理由が消え（境界スコア計算はどちらも同じ）、2関数の情報量も等価（`Segments`から境界位置は`.second`で得られる）になったため統合した（10節）。
+- 空文字列の入力は「エラーではなく空の結果」として扱う（`Segments{}`）。`Error`はUTF-8不正やモデル未読込・未対応形式などの実際の異常系のみに使う。
 
 ### 6.4 アロケータ（将来課題・検討事項）
 
@@ -657,7 +651,7 @@ public:
 `std::pmr::memory_resource` を注入できるオーバーロードを検討中：
 
 ```cpp
-using PmrSegments = std::pmr::vector<Segment>;
+using PmrSegments = std::pmr::vector<std::pair<std::size_t, std::size_t>>;
 
 std::expected<PmrSegments, Error> tokenize(
     std::string_view text,
@@ -678,30 +672,27 @@ segmenter train --backend kytea --corpus corpus.txt --model-out model.bin
 
 ### 7.1 `segmenter predict`（推論）
 
-KyTea / Vaporetto と同様、**標準入力からテキストを読み、標準出力に分かち書き結果を書き出すフィルタ型**を踏襲する。
+KyTea / Vaporetto と同様、**標準入力からテキストを読み、標準出力に分かち書き結果を書き出すフィルタ型**を踏襲する。本ライブラリは分かち書き専用（タグ推定は行わない、10節で決定）。
 
 ```
 segmenter predict --model model.bin < input.txt > output.txt
-segmenter predict --model model.bin --boundaries-only < input.txt > output.txt   # tokenize_boundaries相当
-segmenter predict --model model.bin --scores < input.txt > output.txt            # 境界ごとのスコアも出力
 ```
 
-**オプション（初期案）**
+**オプション（実装済みのもののみ）**
 
 | オプション | 説明 |
 |---|---|
 | `--model <path>` | モデルファイルのパス（必須）。KyTea互換／独自MLPのいずれかを自動判別する（2節） |
-| `--backend <kytea\|mlp>` | バックエンドを明示的に指定（自動判別を上書きしたい場合）。**未実装**（初期案のまま。自動判別で用が足りているため今のところ要望なし） |
-| `--boundaries-only` | タグ推定を行わず分かち書きのみ実行（`tokenize_boundaries`を使用）。**実装済み** |
-| `--scores` | 各境界の分類スコアを合わせて出力。**未実装** |
-| `--encode` | **実装しないことを決定**（10節）。入力は常にUTF-8固定——モデル（3.2節・4.7節）もコーパス形式（5節）もUTF-8前提で、他エンコーディングを選ぶ余地がそもそもない。不正なUTF-8バイト列は`CharTable::encode`/`Vocab::encode`が`ErrorCode::InvalidUtf8`を返し、CLIは該当行以前の出力をflushした上で**即座に中断**（exit code 1・stderrにメッセージ）する。行を黙ってスキップ・切り詰める設計にはしない（バイト単位一致を旨とするこのライブラリで、壊れた入力を黙って通すのは事故の元）。実測確認済み（`printf 'valid\n\xff\xfe bad\nvalid2\n' \| segmenter predict ...` → 1行目のみ出力・exit 1）。ユニットテストは`CharTable`/`Vocab`/`corpus`層で`InvalidUtf8`を確認済み（`tests/unit/{char_table,vocab,train_corpus}_test.cpp`）
+| `--threads <n>` | 並列実行のスレッド数（`0`＝`hardware_concurrency()`、既定） |
+
+初期案にあった`--backend`（自動判別の上書き）・`--scores`（境界スコア出力）は未実装のまま。`--boundaries-only`（分かち書きのみの高速パス）・`--notags`（タグ抑止）は、タグ推定自体の廃止（10節）に伴い**不要になったため削除**——`tokenize()`が最初から分かち書きのみを行う。`--encode`は実装しないことを決定済み（10節、UTF-8固定）。
 
 **出力フォーマット**
 
-KyTeaの出力形式（`単語/タグ1/タグ2 ...` をスペース区切り）を踏襲し、既存ツールチェーンとの互換性を保つ（5.1節のフルアノテーション形式そのもの）。
+KyTeaの分かち書き出力形式（スペース区切りの単語列）を踏襲し、既存ツールチェーンとの互換性を保つ。
 
 ```
-コーパス/ko:pasu の/no 文/buN で/de す/su 。/.
+コーパス の 文 で す 。
 ```
 
 **表層語のエスケープ（`showEscapedString`）**：区切り文字（スペース・`/`・`&`・エスケープ文字`\` 自身）が単語表層に含まれる場合、KyTeaは`\`で前置してエスケープする。バイト単位一致にはこの再現が必須（例：入力 `Hello World` → `Hello \  World`、`2024/12/31` → `2024 \/ 12 \/ 31`）。実装は`append_full_line`（`src/output.cpp`）に集約し、CLIとgoldenテストで共有。4文字とも1バイトASCIIなのでUTF-8継続バイトとは衝突しない。
@@ -778,8 +769,7 @@ src/
 
 **L2: `kytea::Automaton<Payload>`** — 3.2節の`Dictionary<Entry>`のランタイム表現。テンプレートにして、`Payload = FeatVec`（今回のMVPで使う`charDict`/`typeDict`）だけでなく将来の`Payload = WordDictEntry`（タグ推定用の単語辞書）にも同じ型で対応できるようにしておく。KyTeaのように状態を`new`した生ポインタの配列で持つのではなく、`std::vector<State>`と`std::vector<Payload>`をフラットに持つ値型にする。マッチは戻り値をアロケートする`match() -> std::vector<Match>`と、アロケーションを避けたい場面向けのコールバック版`match(text, callback)`の両方を用意する（3.4節のpmr方針と同じ発想を、まずはコールバックという言語機能だけで先取りする）。**このモジュールはモデルファイルのデシリアライズ結果を受け取るだけで、KyTeaのようにAho-Corasickを構築するロジック（`buildGoto`/`buildFailures`）は持たない**（3.2節で確認した通り、ファイルには構築済みオートマトンがそのまま入っているため）。独自MLPバックエンド（4節）は逆に、辞書の単語リストからロード時にこの`Automaton`を構築する側になるので、「構築ロジック」は`Automaton`とは別に`AutomatonBuilder`として後日切り出す。
 
-**L3: `kytea::Model`** — 3.2節の`Config`/`KyteaModel`/`FeatureLookup`に対応するイミュータブルな値型。`static auto load(std::filesystem::path) -> std::expected<Model, Error>`が唯一の構築経路。MVPでは`charDict`/`typeDict`/`selfDict`/`dictVector`/`biases`/`multiplier`/`bias`/`wsConstraint`のみを保持すれば`predict`は動く。単語辞書（`ModelTagEntry`）・サブワード辞書（`ProbTagEntry`）・言語モデル（`KyteaLM`）・タグモデル（`globalMods_`）は**ファイル上に存在すれば読み飛ばしてでも正しく後続位置までシークできる必要がある**（3.2節のセクション順は固定なので、読まないなら「バイト数だけ数えてスキップする」実装が要る）が、値としては保持しなくてよい。タグ推定を実装する段階で`Model`にフィールドを追加する。
-  - **`--boundaries-only`ではない通常の`predict`（今回のコマンド例）はタグ推定も必要**なので、MVPの最終的な出力形式をどうするかは8.3節で補足する。
+**L3: `kytea::Model`** — 3.2節の`Config`/`KyteaModel`/`FeatureLookup`に対応するイミュータブルな値型。`static auto load(std::filesystem::path) -> std::expected<Model, Error>`が唯一の構築経路。保持するのは`charDict`/`typeDict`/`dictVector`/`biases`/`multiplier`/`word_dict`（`char_length`/`in_dict`のみ）——分かち書きに必要な最小限。単語辞書のper-wordタグ情報・サブワード辞書（`ProbTagEntry`）・言語モデル（`KyteaLM`）・タグモデル（`globalMods_`）は**ファイル上に存在するので読み飛ばして正しく後続位置までシークする**（3.2節のセクション順は固定なので、読まないなら「バイト数だけ数えてスキップする」実装が要る）が、値としては保持しない（タグ推定は実装後に撤回、10節末尾で確定）。
 
 **L4: `kytea::scorer`** — 3.3節で復元した`calculateWS`のアルゴリズムをそのまま関数として実装する。`Model`・`CharTable`・入力テキストを受け取り、境界ごとのスコア列を返す純粋関数にする（KyTeaのように`Kytea`インスタンスの内部状態を書き換えるのではない）。
   ```cpp
@@ -787,7 +777,7 @@ src/
   auto segment(const Model& model, const CharTable& chars, std::string_view utf8_text) -> Boundaries;
   ```
 
-**L5: `kytea::KyteaBackend`** — 2節で定義した`tokenize`/`tokenize_boundaries`シグネチャを満たすクラス。中身は`Model`を保持し、`scorer`の関数を呼ぶだけの薄いアダプタ。
+**L5: `kytea::KyteaBackend`** — 2節で定義した`tokenize`シグネチャを満たすクラス。中身は`Model`を保持し、`scorer`の関数を呼ぶだけの薄いアダプタ。
 
 **L6: `Segmenter`** — 2節の設計そのまま。現時点では`std::variant<KyteaBackend>`（MLPは4節が実装され次第追加）。
 
@@ -795,7 +785,9 @@ src/
 
 ### 8.3 MVPのスコープ判断
 
-`segmenter predict --model kytea-model.bin < input.txt > output.txt`（`--boundaries-only`なし）は本来タグ（読み）推定込みの出力を意味するが、タグ推定は単語辞書・サブワード言語モデル・タグモデルまで含む本格実装が必要で範囲が大きい（3.2節の`FeatureLookup`の`tagDictVector`/`tagUnkVector`、9節TODOの通り計算式も未調査）。**最初の実装ステップとしては、`Model`がタグ関連セクションを読み飛ばせる状態で`tokenize_boundaries`（分かち書きのみ）を先に成立させ、`predict`のデフォルト出力もいったんタグなし（`--boundaries-only`相当の出力）にしてしまうのが妥当**。8.2節のレイヤ構成はこの判断に影響されない（`Model`にフィールドを足すだけで済む）ため、後からタグ推定を追加しても大きな手戻りにならない。
+`segmenter predict --model kytea-model.bin < input.txt > output.txt`は当初タグ（読み）推定込みの出力を意味する想定だったが、タグ推定は単語辞書・サブワード言語モデル・タグモデルまで含む本格実装が必要で範囲が大きい（3.2節の`FeatureLookup`の`tagDictVector`/`tagUnkVector`）。**最初の実装ステップとしては、`Model`がタグ関連セクションを読み飛ばせる状態で分かち書きのみを先に成立させるのが妥当**、という判断でMVPを組んだ。
+
+**その後の経緯（10節）**：タグ推定は実際に実装・実kyteaとのバイト完全一致まで検証されたが、最終的に**撤回し本ライブラリを分かち書き専用とすることに決定**。したがって上記の「MVPはまず分かち書きのみ」という判断は、一時的な実装順序の選択ではなく最終形そのものになった。
 
 ### 8.4 リポジトリ全体のディレクトリ構成
 
@@ -886,12 +878,12 @@ cpp-segmentlib/
 - [x] **L2: `kytea::Automaton<Payload>`**（Aho-Corasickランタイム表現、`Payload`＋読み取りコールバックでエントリ層と分離。ヘッダオンリーテンプレート）＋ doctestユニットテスト（gotos/failure fallback/伝播済みoutput/absent辞書）。**実モデルで検証済み**：`charDict`=81224状態/75377ペイロード（各サイズ6=charWindow×2）、`typeDict`=233状態、`selfDict`=空、wsModelは`numClasses=2`/`multiplier≈0.000109367`。`match`はfailure链を辿らず伝播済み`output`をそのまま使う（3.2節通り）
   - **`find_entry`**（KyTea `Dictionary::findEntry`相当）：goto遷移のみ走査し、終端状態の`is_branch`＋`output`で完全一致を判定（段階A-2でretain）
 - [x] **L3: `kytea::Model`**（Config/wsModel FeatureLookup/単語辞書をパースし、タグ・サブワード・LM関連はカーソルを進めてスキップ。`load()`が`std::expected`境界）＋ 合成モデルのdoctestテスト。**実モデル`jp-0.4.7-5.mod`で`Model::load`検証済み**：multiplier=0.000109367、biases[0]=-193、charDict=81224状態、単語辞書=850724エントリ/2080192状態/numDicts=7。**`dictVector`サイズ84 = numDicts(7)×3×dictN(4) が独立に一致**し、ファイル全体のパース整合性を裏付け（ロード約2.1秒、将来最適化余地）
-- [x] **タグ推定 段階A-1: モデルローダの retain 化**（`tag_prediction_plan.ja.md` 2節）：これまでスキップしていたタグモデル群を保持に変更。`TagModel`（multiplier/num_weights/`TagFeatureLookup`＝charDict/typeDict/selfDict/biases/tagDictVector/tagUnkVector）、グローバルタグモデル（`global_tags_`/`global_mods_`、レベルごと）、単語辞書エントリの per-word タグ情報（`WordEntry.tags`/`tag_in_dicts`/`tag_mods`）を保持。`CharTable`に id→UTF-8 逆引き `decode()` と `unicode::encode()` を追加し、タグ候補文字列をロード時にUTF-8化。**実モデルで実測確認**（`tag_prediction_plan.ja.md` 1.1節）：lev0（品詞）はグローバル一択（per-word 0件・num_weights=21・selfDict非空）、lev1（読み）は per-word 一択（グローバル無し・候補326369語/per-wordモデル1828語）。WS既存34テスト回帰なし
-- [x] **タグ推定 段階A-2: 既知語スコアラ＋出力整形＋CLI**（`tag_prediction_plan.ja.md` 3〜5節）：`kytea.cpp:calculateTags`のelse経路（既知語）を`tag_scorer.cpp`に移植（`addTagNgrams`/`addSelfWeights`/`addTagDictWeights`/`getDictionaryMatches`）。ディスパッチ（globalMods優先→per-wordモデル→未知語）・`num_weights`基準のループ（候補配列長と不一致な場合がある実測どおり）・`std::sort`+`kyteaTagMore`複製での先頭候補確定を忠実再現。`Automaton`に`find_entry`（KyTea `Dictionary::findEntry`相当、`is_branch`をretainして厳密化）を追加。出力は`append_tagged_line`（表層エスケープ・タグ非エスケープ）＋`--notags`。goldenを拡張し既知語の品詞・読みはバイト一致
-- [x] **タグ推定 段階B: 未知語の読み推定（サブワード辞書＋LM＋ビームサーチ）**（`tag_prediction_plan.ja.md` 8節）：`Kytea::calculateUnknownTag`/`generateTagCandidates`/`KyteaLM::scoreSingle`を移植。モデルローダに`subwordDict_`（`ProbSubwordEntry`：読み候補は生CharId列で保持しUTF-8化しない）と`numTags`個の`KyteaLM`（`n`/`vocabSize`＋`probs`/`fallbacks`の`unordered_map<u16string,double>`、`NEG_INFINITY=-999.0`センチネル除外）を追加（読み順：wordDict→subwordDict→per-level LM、`Kytea::readModel`で確定）。`unkBeam=50`/`tagMax=3`/`defTag="UNK"`はKyTeaの実行時既定値（モデル非格納）を採用。**実測：ゴールデン20文＋ストレス15文＋アオゾラ71万字を含む全検証でKyTeaの既定（タグ付き）出力とバイト完全一致**（未知語の読み推定・`UNK`フォールバックまで含む）。唯一の既知の相違はCJK拡張B文字（`findType`バグの意図的不追従、10節）に由来するWS分岐のみ
-- [x] **L5: `kytea::KyteaBackend`** / **L6: `Segmenter`**（`std::variant`ディスパッチ、`string_view`入力＋`std::expected`、2/6節）
-- [x] **CLI: `segmenter predict`**（`--model`/`--threads`、stdin→stdoutフィルタ、`segmenter train`は未実装スタブ、7節）。既定はタグ付き出力（`append_tagged_line`＝表層/品詞/読み）。`--notags`／`--boundaries-only`はタグを付けず分かち書きのみ——両者とも**タグ計算を丸ごと省く高速パス**（`tokenize_boundaries_all`→`append_boundary_line`）を通し、`kytea -notags`とバイト一致（golden テストで境界パス＝既存WSパスの一致も固定）。※`--boundaries-only`は当初パースのみで無視される死んだフラグだったのを配線（段階B完了後に発見・修正）
-- [x] **golden テスト（KyTea実出力とのバイト単位一致、8.4節）**：15文の固定fixtureで`kytea -notags`と照合。**model未取得時はスキップ**（CI耐性）
+- [~] **タグ推定 段階A-1: モデルローダの retain 化**：`TagModel`/`TagFeatureLookup`/グローバルタグモデル・per-wordタグ情報の保持を実装・実モデルで実測確認まで完了していたが、**その後撤回**（10節末尾）。`model.h`/`model.cpp`はskipのみを行う元の形に戻した
+- [~] **タグ推定 段階A-2: 既知語スコアラ＋出力整形＋CLI**：実装・バイト一致検証（KyTea既定タグ付き出力と完全一致）まで完了していたが、**その後撤回**（10節）——本ライブラリを分かち書き専用とする方針決定により`tag_scorer.cpp`ごと削除。実装記録は`git log`（削除コミット）と旧`tag_prediction_plan.ja.md`（同コミットで削除）を参照
+- [~] **タグ推定 段階B: 未知語の読み推定（サブワード辞書＋LM＋ビームサーチ）**：同上、実装・検証済みの後に撤回。KyTeaモデルファイルのサブワード辞書・言語モデル節は現在読み飛ばされる（3.2節）
+- [x] **L5: `kytea::KyteaBackend`** / **L6: `Segmenter`**（`std::variant`ディスパッチ、`string_view`入力＋`std::expected`、2/6節）。分かち書き専用——`tokenize()`一本（旧`tokenize_boundaries()`はタグ推定撤回に伴い統合済み、10節）
+- [x] **CLI: `segmenter predict`**（`--model`/`--threads`、stdin→stdoutフィルタ、`segmenter train`は`--backend mlp`のみ実装、`--backend kytea`は未実装、7節）。出力は分かち書きのみ（`append_full_line`＝表層のみ、スペース区切り）。旧`--notags`／`--boundaries-only`／`append_tagged_line`はタグ推定撤回に伴い削除（10節）
+- [x] **golden テスト（KyTea実出力とのバイト単位一致、8.4節）**：固定fixtureで`kytea -notags`と照合。**model未取得時はスキップ**（CI耐性）
 - [x] **未知文字（学習語彙外）の等価性を検証**：KyTeaの動的ID採番（`mapChar add=true`）と本ライブラリの`kNoChar`落としが、WS素性が全てオートマトンマッチ（学習時ID `1..K`）であるため分かち書き出力上は完全等価であることを、`string-util.cpp`/`kytea.cpp`のソース確認＋未知の絵文字・記号でのバイト一致で確定（3.1節・10節）。golden fixtureに未知文字行（😀😱ℵℶℷ★☆♠🍣ⅠⅡⅢ）を追加して回帰固定
 - [x] **🎉 KyTeaとバイト単位で完全一致を達成**：多様な入力600行（半角/全角混在・英数字・記号・古文・顔文字的連続）で`kytea -model jp-0.4.7-5.mod -notags`と`diff`一致。出力の記号エスケープ（`showEscapedString`：スペース/`/`/`&`/`\`を`\`で前置）まで再現（例：`Hello \  World`、`2024 \/ 12`）
 
@@ -937,24 +929,9 @@ cpp-segmentlib/
 - segmentlibは**KyTeaとバイト完全一致しながらシングルスレッド推論5倍以上、ロードも速い**（`bench_kytea`の単語数`sink`が完全一致し、同じ分割を確認）。KyTeaの実装（素性文字列のハッシュ・神クラス）を避け、フラット配列＋正準double-array Aho-Corasick＋root直引きにした効果。
 - Vaporettoはシングルスレッドでは依然最速（正準化・事前加算・SIMDが揃ったdaachorse実装）だが、出力が厳密には非一致（0.44%）。segmentlibは**マルチスレッド化でVaporettoのシングルスレッドを上回る**（8スレッドで約5.2倍）。
 
-### 9.2.1 タグ推定込みの速度（段階A-2/B、参考値）
+### 9.2.1（撤回）タグ推定込みの速度
 
-上表（9.2節）は**分かち書きのみ**（`-notags`相当・`tokenize_boundaries`）で条件固定した比較。タグ推定（品詞＋読み、`tokenize`既定）はKyTea本体の`calculateTags`と同じく**語ごとに窓（前後char_n/type_n文字）を毎回ルートから再走査**するアルゴリズム（分かち書きの文全体1回連続走査とは構造が異なる）で、以下は分かち書き専用経路との比較のための参考値。
-
-推論速度（ロードとは独立。ロードは推論パスに関係なく一度きりの同一コスト＝下記「ロード時間の内訳」参照）：
-
-| 経路 | M文字/秒（単スレッド） | 対WSのみ |
-|---|---|---|
-| WSのみ（`tokenize_boundaries`、9.2節と同一条件） | 5.6〜6.8 | 1.00× |
-| **タグ込み（`tokenize`既定、品詞＋読み）** | **0.74〜0.83** | **約8×低速** |
-
-（Apple M1 Pro、青空文庫71万字、best-of-7。タグ込みは9.4節 第12弾のargmax化後の値。参考：外部CLI計測ではKyTea自身も`-notags`→既定（タグ付き）で約3倍低速化。絶対値は環境依存だが、我々のタグ込み実測（in-process 0.74〜0.83 M/s）はKyTeaのタグ付きCLI（〜0.12 M/s、I/O込み）より速い。**重要な計測上の教訓**：段階A-2/B実装直後、`build/`が`CMAKE_BUILD_TYPE=Debug`のまま残っていたのに気づかず「65〜70倍低速」という数値を出してしまった。`Release`再構成のみで0.10→0.66 M/sまで回復——それは計測ミスであり実装のリグレッションではなかった。**ベンチマーク実行前は必ず`cmake -B build -DCMAKE_BUILD_TYPE=Release`でビルド構成を確認すること**）
-
-**ロード時間の内訳（実測）**：モデルロードは約0.8〜1.3秒（熱状態でブレ大、同条件で1.1〜2.0秒の観測もあり）。パース各段を計測した結果、**word_dict の構築が約88%（〜1150ms）** を占め、**subword辞書＋2レベルLM は合計わずか約16ms（約1%）** だった。当初「ロード増加の主因は subword/LM」と推測していたが**実測で否定された**——subword辞書は3ms、LM群は14ms程度に過ぎない。ロードの主コストは、分かち書き時代から存在する word_dict（85万語・200万状態のdouble-array構築）で、段階A-1で per-word タグ情報の保持＋85万語ぶんのタグ文字列UTF-8デコードが加わった分がそこに含まれる。
-
-**未着手の最適化余地**：
-- モデルロード短縮を狙うなら対象は **word_dict のパース／double-array構築**（subword/LMの遅延ロードは約16ms＝1%しか縮まず割に合わない、実測で確認）。
-- タグ推定自体の高速化：先頭候補選択のargmax化は実施済み（9.4節 第12弾、+10〜20%）。payload平坦化はA/B計測で効果なしと判明し撤回済み（第11弾＝負の結果）。`add_tag_ngrams`（Releaseプロファイルで約31%）の拡張加算ループは明示SIMDカーネル化済み（第13弾、ループ単体1.65倍・エンドツーエンドはアイドル時再計測待ち）。事前計算方式は走査でなく加算が律速のため不採用と結論（10節TODO）。現状WSのみ比で約8倍低速だがKyTeaのタグ付き実測より速い。
+タグ推定（段階A-2/B）は実装・検証・最適化まで完了していたが、その後撤回された（本ライブラリを分かち書き専用とする方針決定、10節）。本節にあったタグ込み速度の実測（WSのみ比約8倍低速・word_dictロードコストの内訳・第12/13弾の最適化記録）は、対象コードごと削除済み。詳細は削除コミット（`git log`）を参照。
 
 ### 9.4 推論最適化（バイト一致を保ったまま）
 
@@ -988,9 +965,8 @@ cpp-segmentlib/
 - **試したが不採用 第11弾：`Automaton<Payload>`のpayload平坦化**（負の結果）。段階A-2/B完了直後、タグ推定込みの`tokenize`が65〜70倍低速という数値を見て「`addTagNgrams`（品詞lev0が全語で発火）が語ごとに小窓を再走査し、`Payload=FeatVec`（`vector<vector<int16_t>>`）の個別ヒープ確保が疎参照＝キャッシュミスを起こす」と推測し、`Payload`が`std::vector<T>`のとき全ペイロードを連続バッファ＋オフセット配列に平坦化して`span`を返す最適化を実装した。**しかし2つの問題が判明して撤回した**：
   1. **真因は計測ミス**：65〜70倍の大半は`build/`が`CMAKE_BUILD_TYPE=Debug`のまま残っていたため。**`Release`再構成だけで0.10→0.42〜0.66 M/sまで回復**（ロードも5.6秒→1.9秒）。実装のリグレッションではなくビルド構成の見落としだった。
   2. **平坦化に測定可能な効果なし**：`Release`で平坦化あり/なしを同一マシン・背中合わせ・best-of-7で6ラウンド交互計測したところ、両者の分布は完全に重なった（no-flat最良0.805・中央値約0.667、flat最良0.732・中央値約0.678。変種間の差＜熱ノイズ±15%）。推測した「個別ヒープ確保による疎参照」は、読み取り専用ペイロードがロード時に連番malloc→ほぼ隣接配置されること・ベクタヘッダ配列自体は連続で余分な間接参照1回は分岐予測が効くこと、から実測上のボトルネックではなかった。
-  - **教訓**：`if constexpr`によるテンプレート二重化・戻り値型の分岐（`span`⇄参照）・「空span＝not-found」の潜在的落とし穴という相応の複雑性を、A/B計測前に導入してしまった。**まず`Release`で正しく計測し、効果を確認してから複雑性を入れるべきだった**。撤回して元のシンプルな`vector<Payload>`のままとした。タグ推定を本当に速くするなら、格納レイアウトではなく語ごとの再走査そのものを削減する事前計算方式が本筋（9.2.1節・10節TODO）。
-- **効いた施策 第12弾：タグ推定の先頭候補選択を毎語フルソート→線形argmaxに**（タグ推定 +10〜20%）。`predict_word_tags`は各語・各レベルで候補（品詞21クラス等）の`(index, score×multiplier)`ペアベクタを作り`std::sort`で降順ソートして先頭だけ使っていた。実際に必要なのは最大要素のみなので、`std::sort`＋ペアベクタ構築＋double乗算を廃し、整数スコアの単純な線形最大スキャン1本に置換（`multiplier>0`より整数スコアの順序＝confidence順序で、同点構造も一致）。Releaseプロファイルで`std::__introsort`が全体の約7%を占めていた。**バイト一致の要注意点**：`std::sort`の同点順序は未規定で、これまでKyTeaと一致していたのは同一libc++の`std::sort`を走らせていたから。線形argmax（最小indexの最大値）は理論上は同点時に分岐しうるが、青空文庫20822行＋goldenでバイト完全一致を確認（実データで同点なし）。**背中合わせA/B（best-of-7×4ラウンド）で全ラウンドargmaxが勝利**（sort 0.63〜0.71 / argmax 0.74〜0.81 M/s、分布の重なりなし＝第11弾とは対照的に実効果あり）。コードも短くなった（`ranked`スクラッチ削除）。
-- **第13弾：タグ推定の拡張加算ループを明示SIMDカーネル化**（10節TODOの`add_tag_ngrams`高速化＝タグ推定の最大コスト・全体の約18%と実測済みだった項目）。`int32 scores[j] += int16 vec[pos+j]`（nw=21）の拡張加算は、実行時境界のためコンパイラが自動ベクトル化しない（`__restrict`でも不変と実測済み）。MLP側の`kernels.h`（scalar oracle＋NEON/AVX2/scalarディスパッチ＋bit一致テストのインフラ）に拡張加算カーネル`add_widen_i16_i32`を追加し、`tag_scorer.cpp`の4箇所（`add_tag_ngrams`のマッチ加算・`add_self_weights`・`add_tag_dict_weights`・bias加算）から使用。カーネルは汎用整数演算でMLP固有ではないため配置はkernels.hのまま（KyTeaバックエンド→mlp/kernels.hのクロスモジュール依存はヘッダコメントに明記）。**整数加算は厳密なのでバイト一致は構成上保証**——golden・青空文庫20822行の新旧バイナリ出力バイト完全一致・全115テストgreenで確認。**ループ単体の実測はプロセス内交互A/B（min-time、実行時nw=21、add_tag_ngramsと同じアクセスパターン）でscalar 1.71ms vs NEON 1.04ms＝1.65倍**（2回再現・負荷に頑健な計測法）。期待されるエンドツーエンド効果は 18%×(1−1/1.65)≈**7%**。**ただしエンドツーエンドのA/Bは未確定**：計測時にマシンがビルド/nodeプロセスで高負荷（load average 31、throughputが0.24〜0.96 M/sで±50%ぶれ）だったため、tokenize全体での確認はアイドル状態での再計測待ち。1幅化実験（+9〜25%）との差分は、あちらがロード削減20要素分も含むため（10節TODOに記録済みの留意点どおり）。
+  - **教訓**：`if constexpr`によるテンプレート二重化・戻り値型の分岐（`span`⇄参照）・「空span＝not-found」の潜在的落とし穴という相応の複雑性を、A/B計測前に導入してしまった。**まず`Release`で正しく計測し、効果を確認してから複雑性を入れるべきだった**。撤回して元のシンプルな`vector<Payload>`のままとした。
+- **（撤回）第12弾：タグ推定の先頭候補選択のargmax化** および **（撤回）第13弾：タグ推定の拡張加算ループのSIMDカーネル化**：いずれも実装・効果測定まで完了していたが、タグ推定自体の撤回（本ライブラリを分かち書き専用とする方針決定、10節）に伴い対象コード（`tag_scorer.cpp`）ごと削除。詳細は削除コミットを参照。
 
 - `bench/setup.sh`：青空文庫取得＋クリーン、Vaporettoビルド、モデル変換（1回だけ）。
 - `bench/run.sh`：正確性ゲート → in-process推論計測 → 表出力。`bench/results/`に保存。
@@ -998,6 +974,8 @@ cpp-segmentlib/
 - `bench/.vendor/`・`bench/corpus/`・`bench/results/`はgit管理外。
 
 ## 10. 未決事項 / TODO
+
+**方針決定：本ライブラリは分かち書き専用とし、タグ推定（品詞・読み）機能は行わない。** KyTeaバックエンドのタグ推定（段階A-1/A-2/B）は実装・実kyteaとのバイト完全一致検証・SIMD最適化まで完了していたが、以下の理由で撤回した：(1) ライブラリ名（segment=分かち書き）に沿ってスコープを単純化する、(2) `Segments`型を`Segment{start,end,tags}`から`std::vector<std::pair<size_t,size_t>>`へ単純化でき、`tokenize`/`tokenize_boundaries`の2関数も1関数に統合できる、(3) MLPバックエンドへタグ推定を追加するのは（品詞は中規模、読みは未知語のオープン語彙生成問題で研究要素あり）大きすぎるため見送りとなり、その結果2バックエンド間でタグ対応が非対称になっていた。`tag_scorer.{h,cpp}`・`docs/tag_prediction_plan.{ja.,}md`は削除済み。KyTeaモデルファイルのタグ関連セクション（グローバルタグモデル・per-wordタグ情報・サブワード辞書・言語モデル）は引き続き正しくバイト数をスキップする（3.2節）——ファイル形式自体は変更できないため。
 
 - [x] モデルファイルのセクション構成・型（3.2節で確定：ヘッダ→Config→wsModel→タグモデル→辞書→サブワード辞書→LM）
 - [x] コーパス仕様（フル/部分アノテーション、5節で確定）
@@ -1008,13 +986,13 @@ cpp-segmentlib/
 - [x] `mapChar`が推論時に未知文字（学習語彙にない文字）をどう扱うか：**解決**。KyTeaは`mapString`→`mapChar(add=true)`で未知文字に新規ID（`charTypes_.size()`）を動的採番するが、WS素性は全てオートマトンマッチ（学習時ID `1..K`）のため、未知文字を`kNoChar=0`に落とす本ライブラリと**分かち書き出力は完全等価**（3.1節に論証＋実測。golden fixtureに未知文字行を収録しバイト一致を固定）。CJK拡張B漢字の相違は別軸の`findType`バグ（意図的）。
 - [x] テキスト形式（`T`）とバイナリ形式（`B`）のどちらを主対応にするか：**バイナリ（`B`）のみ対応で確定・対応不要**。配布モデルはバイナリで、テキスト形式は自前で`train-kytea -modelformat text`しない限り遭遇しない。テキスト形式への対応は行わない。
 - [x] 非量子化モデル（`FeatVal=double`、バージョン`"0.4.0NQ"`）への対応要否：**対応不要で確定**。配布モデルは量子化ビルド（`int16_t`）。非量子化は`DISABLE_QUANTIZE`ビルドで自前学習した場合のみ生成され、実運用で遭遇しない。`"0.4.0NQ"`ヘッダを検出した場合はエラーとする方針（暗黙の誤読を防ぐ）。
-- [x] サブワード辞書（`Dictionary<ProbTagEntry>`）・言語モデル（`KyteaLM`）・タグ推定のスコア計算式（`addTagNgrams`/`addTagDictWeights`/`addSelfWeights`/`scoreSingle`）：**段階A-2/Bで実装・解決**（8.6節）。既知語は`addTagNgrams`系を`tag_scorer.cpp`に移植、未知語の読みは`generateTagCandidates`のサブワード格子DP＋ビームサーチ＋`KyteaLM::scoreSingle`のn-gramバックオフを忠実移植。ゴールデン・アオゾラ71万字でKyTea既定（タグ付き）出力とバイト完全一致
+- [~] サブワード辞書（`Dictionary<ProbTagEntry>`）・言語モデル（`KyteaLM`）・タグ推定のスコア計算式：段階A-2/Bで実装・検証まで完了していたが、**その後撤回**（分かち書き専用方針、10節末尾の決定）。`tag_scorer.cpp`ごと削除済み
 - [x] **Vaporetto互換バックエンドは作らないことを決定。** Vaporettoのモデルバイナリフォーマット（zstd外装＋`MODEL_MAGIC`＋bincode2 standard設定のフラットリスト構造）は初期段階で調査しワイヤーフォーマットも実測で確認したが、バックエンド自体は実装せず、KyTea互換＋独自MLPの2バックエンド構成（1節）を最終形とする。Vaporettoは引き続き外部ベンチマーク比較対象としてのみ使用する（9節）
 - [ ] 独自MLPバックエンドのネットワーク構成・学習方式（4節、要件がある程度固まってから設計）
 - [x] 特徴抽出の高速化方式（KyTea自身もAho-Corasickを採用済みと判明。Double-Array化を実施し大幅に効くことを確認 — 9.4節 第3〜10弾）
 - [x] CLIのサブコマンド構成（7節：`segmenter predict`/`segmenter train`。オプション形状は確定、学習エンジンの中身は未着手のまま）
-- [x] `--boundaries-only` を配線（段階B完了後、パースのみで無視される死んだフラグだったのを発見・修正）。`--notags`と共にタグ計算を省く高速パス（`tokenize_boundaries_all`→`append_boundary_line`）を通し、`kytea -notags`とバイト一致。goldenで境界パス＝既存WSパスの一致も固定（8.6節CLI項）
-- [~] 複数候補＋信頼度出力（KyTea `-out conf`／`-tagmax`）：**通常ユースケース（最尤1解）には不要のため実装しない**（KyTea/MeCabとも既定single-best、N-best・周辺確率はニッチ用途）。当初plan §5で`-alltags`と誤記していたがそのオプションは実在しない。実装するなら段階A-2で省いたマージン計算＋全候補保持＋float整形の再現が要る。必要が生じるまで見送り（tag_prediction_plan §5）
+- [~]（撤回）`--boundaries-only`／`--notags`の配線とタグ計算省略の高速パス：タグ推定自体の撤回に伴い両フラグごと削除（`tokenize()`が最初から分かち書きのみ、10節末尾）
+- [x] 複数候補＋信頼度出力（KyTea `-out conf`／`-tagmax`）：タグ推定を撤回したため論点自体が消滅（10節末尾）
 - [~] 部分アノテーション入力＋ハード制約（`-wsconst`相当、§238/§6.2）：制約付き解析は未実装。配布jpモデルの`wsConstraint`は通常空で既定出力のバイト一致には無影響。必要が生じるまで見送り
 - [x] 学習機能（KyTea互換の学習エンジンを自前実装するか、外部LIBLINEAR連携にするか）：**どちらも行わないことに決定**。3節が当初から掲げていた「KyTeaバックエンドは推論のみ」というスコープを最終確定とする。理由：(1) 独自MLPバックエンドは自前学習エンジンが完成・実運用済み（4.9節、design5.8実績）で、学習機能自体は本ライブラリに既に存在する。(2) KyTea互換モデルの学習が必要な場面（本ライブラリの評価・比較、`corpus/ud-gsd/kytea.mod`の生成等）では、実際には常に本物の`train-kytea`（Homebrew配布、LIBLINEAR本体を内包）を外部ツールとして直接呼んでおり、この運用で用が足りている。(3) LIBLINEARの自前再実装は「素性抽出は一字一句忠実再現が必要（3.1節）だが分類器自体は汎用的」という3節の整理どおり、素性側と違い忠実再現の必然性がなく、外部の実装（LIBLINEAR本体）をそのまま使う方が正しい車輪の再発明回避になる。`segmenter train --backend kytea`は7.2節の初期案オプション形状を実装せず、現状どおり明示的な「not implemented」エラー（`train_command.cpp`）のままとする
 - [x] `--encode` の実際の対応範囲（UTF-8以外を切り捨てるか）：**実装しないことに決定**（7.1節）。フラグ自体を追加せず、入力は常にUTF-8固定。不正なUTF-8は行を切り捨てず、出現行以前の出力をflushして即座にexit code 1で中断（既存の`CharTable::encode`のエラー経路で実現済み・実測確認済み）。他エンコーディングを選ぶ動機（モデル・コーパスとも常にUTF-8前提）がそもそもないため、この判断で完結
@@ -1035,7 +1013,5 @@ cpp-segmentlib/
 - [x] ベンチのマルチスレッド版：`Segmenter::tokenize_all`の並列ベンチを追加（9.2/9.4節：8スレッドで41 M/s、Vaporetto単スレッドの約5倍）
 - [x] より大規模・多ジャンルのコーパスでの再計測：**精度・速度とも完了**（4.8節）。UD_Japanese-PUD（別ジャンル out-of-domain、1000文・27,788境界）を追加し、GSD学習済みモデルを再学習せず適用。精度：KyTea/MLP とも劣化なし（PUD の方が高い）、MLP-KyTea 差は 0.6〜0.7pt で安定（GSD単独0.74pt→PUD0.62pt→合算0.67pt）、3倍規模・2ジャンルで初回の0.7ptが代表値と確認。速度：GSD train 2.39x・PUD test 2.21x（実KyTea比）で既存の「2.2〜2.4x」レンジ内、分割速度はジャンル非感受と確認。取得は `scripts/fetch_ud_pud_corpus.sh`。残るのは配布モデル相当の大規模コーパス（BCCWJ）のみで、これは入手不可（4.8節冒頭）
 - [~] `Automaton<Payload>`のpayload平坦化第11弾：`FeatVec`ペイロードを連続バッファ化する最適化を実装したが、`Release`でのA/B計測（背中合わせ・best-of-7・6ラウンド）で効果なしと判明し撤回（負の結果、9.4節 第11弾）。真因はビルド構成の見落とし（`Debug`）で、`Release`再構成のみで回復した
-- [x] タグ推定込みのモデルロード時間の内訳を実測：**word_dict構築が約88%（〜1150ms）、subword辞書＋2レベルLMは合計約16ms（約1%）**。「subword/LMが主因」という当初の推測は否定された。ロード短縮の対象はword_dictであってsubword/LMではない（遅延ロードは約16msしか縮まず割に合わない）（9.2.1節）
-- [x] タグ推定の先頭候補選択を毎語フルソート→線形argmaxに（第12弾、+10〜20%・バイト一致維持、9.4節）
-- [~] `add_tag_ngrams`の高速化（Releaseプロファイルで約31%＝タグ推定の最大コスト）：**明示SIMDカーネル化を実装済み**（9.4節 第13弾）。21幅のint16→int32拡張加算（全体の約18%と1幅化A/Bで実測済み・`__restrict`では自動ベクトル化されず）を、`kernels.h`に追加した`add_widen_i16_i32`（scalar/NEON/AVX2、bit一致テスト付き）で置換。バイト一致は整数加算の厳密性により構成上保証（golden＋青空文庫2万行diff＋全115テストで確認済み）。ループ単体はプロセス内A/Bで**1.65倍**（期待エンドツーエンド≈7%）。**エンドツーエンドA/Bのみ未確定**（計測時マシン高負荷のためアイドル時に再計測）。なお検討済みの代替案「文全体1回走査の事前計算方式」は**不採用と結論**：走査対象は語の外側±window（char_n=3で高々6文字）と小さく、律速はマッチごとのペイロード加算（語ごとにマッチ集合が異なるため事前計算では消せない）であり、ボトルネックでない項を攻める案だった。さらにjunction越えマッチ（語の前後の連結をまたぐn-gram）は文位置ごとの事前計算では再現できずバイト一致リスクも高い
+- [~]（撤回）タグ推定込みのモデルロード時間の内訳実測・先頭候補選択のargmax化・`add_tag_ngrams`のSIMDカーネル化：いずれもタグ推定撤回（10節末尾）に伴い対象コードごと削除
 - [ ] ベンチマーク実行前は必ず`cmake -B build -DCMAKE_BUILD_TYPE=Release`でビルド構成を確認する運用の徹底（`Debug`構成のまま計測すると数十倍のミスリーディングな数値が出ることを実体験済み、9.4節 第11弾の記述参照）
