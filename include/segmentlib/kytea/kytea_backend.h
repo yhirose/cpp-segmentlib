@@ -18,7 +18,9 @@ public:
 
     // Full segmentation. When the model carries tag data (do_tags), each
     // Segment's tag list is filled with the top candidate per level (POS,
-    // reading, ...); unknown-word readings (stage B) are left empty.
+    // reading, ...), including unknown-word readings (stage B: subword-dictionary
+    // + language-model beam search, falling back to "UNK" when no candidate
+    // exists — see predict_word_tags).
     [[nodiscard]] std::expected<Segments, Error> tokenize(std::string_view text) const;
 
     // Word boundaries only: byte offsets of the cut points between words.
