@@ -1,7 +1,5 @@
 # Design Document
 
-This file documents only the current specification, matching the source code. Development history, reverted features, failed optimizations, and the reasoning behind decisions are in `docs/record.md`.
-
 ## 1. Overview
 
 A C++ **segmentation-only** word-segmentation library using the same "pointwise prediction" approach as KyTea / Vaporetto: an independent binary classification (split / do not split) at each character boundary. Unlike lattice + Viterbi minimum-cost methods (e.g. MeCab), it needs no dictionary cost design or dynamic programming.
@@ -57,7 +55,7 @@ Each backend class only needs to satisfy the `tokenize` signature; the internal 
 
 - Loads a model produced by KyTea (`train-kytea`) as-is.
 - Features are the same three kinds as KyTea: character n-grams, character-type n-grams, dictionary-derived word features.
-- **Inference only** (no training engine; see `docs/record.md`).
+- **Inference only** (no training engine).
 - The model binary format is parsed directly from the KyTea model file (no conversion tool step).
 - **Segmentation only** (no tag estimation).
 
@@ -365,7 +363,7 @@ Example: `SegmentLibMLP 1\n`. This `"SegmentLibMLP "` signature is used for back
 
 ### 4.8 Evaluation Results (Current Measured Values)
 
-Comparisons retrain KyTea on an obtainable corpus (UD_Japanese-GSD, CC BY-SA 4.0) and compare it against the MLP backend trained on the identical data and dictionary, since the distributed model's training corpus is unobtainable (see `docs/record.md` for the full history).
+Comparisons retrain KyTea on an obtainable corpus (UD_Japanese-GSD, CC BY-SA 4.0) and compare it against the MLP backend trained on the identical data and dictionary, since the distributed model's training corpus is unobtainable.
 
 **Accuracy** (`scripts/eval_segmentation.py`, boundary F-score):
 
@@ -706,7 +704,6 @@ cpp-segmentlib/
 │   └── strip_kytea_tags.py
 ├── docs/
 │   ├── design.ja.md / design.md
-│   ├── record.ja.md / record.md  # development history, reversals, negative results
 │   ├── mlp_module_design.ja.md / mlp_module_design.md
 │   └── mlp_impl_design.ja.md / mlp_impl_design.md
 ├── .github/workflows/ci.yml
@@ -775,11 +772,9 @@ cpp-segmentlib/
 
 **Findings**: segmentlib achieves byte-for-byte agreement with KyTea while inferring more than 5x faster single-threaded, with faster loading too. Vaporetto is still fastest single-threaded (though its output is not strictly identical, 0.44% mismatch), but segmentlib surpasses Vaporetto's single-thread speed via multithreading (about 5.2x at 8 threads).
 
-See `docs/record.md` for the inference-optimization trial-and-error history.
-
 ## 10. Known Limitations / Unimplemented Features
 
-- **Tag estimation (POS/reading)**: not performed. Segmentation only (history in `docs/record.md`).
+- **Tag estimation (POS/reading)**: not performed. Segmentation only.
 - **KyTea-compatible training engine**: not implemented. `segmenter train --backend kytea` returns an explicit error. Use the real `train-kytea` when a KyTea-compatible model is needed.
 - **Vaporetto-compatible backend**: not built. Vaporetto is used only as an external benchmark comparison target.
 - **`--encode`**: not implemented. Input is always fixed to UTF-8.

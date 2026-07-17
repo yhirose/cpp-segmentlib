@@ -17,7 +17,6 @@ Detailed design documents (English / Japanese):
 - Overall design: [docs/design.md](docs/design.md) / [docs/design.ja.md](docs/design.ja.md)
 - MLP backend implementation design: [docs/mlp_impl_design.md](docs/mlp_impl_design.md) / [docs/mlp_impl_design.ja.md](docs/mlp_impl_design.ja.md)
 - MLP backend module design: [docs/mlp_module_design.md](docs/mlp_module_design.md) / [docs/mlp_module_design.ja.md](docs/mlp_module_design.ja.md)
-- Tag prediction plan: [docs/tag_prediction_plan.md](docs/tag_prediction_plan.md) / [docs/tag_prediction_plan.ja.md](docs/tag_prediction_plan.ja.md)
 
 ## License
 

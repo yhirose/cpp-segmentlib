@@ -1,7 +1,5 @@
 # 設計ドキュメント
 
-このファイルは現在のソースコードと一致する仕様のみを記載する。開発過程の経緯・撤回した機能・効かなかった最適化・意思決定の理由は `docs/record.ja.md` を参照。
-
 ## 1. 概要
 
 KyTea / Vaporetto と同じ「点推定（pointwise prediction）」方式を採用した、C++の**分かち書き専用**ライブラリ。文字境界ごとに独立した二値分類（区切る/区切らない）を分類器で行う。ラティス＋Viterbiによる最小コスト法（MeCab等）とは異なり、辞書コストの設計や動的計画法を必要としない。
@@ -57,7 +55,7 @@ private:
 
 - KyTeaが出力するモデル（`train-kytea`で学習されたモデル）をそのまま読み込む。
 - 素性はKyTeaと同じ3種：文字n-gram、文字種n-gram、辞書由来の単語素性。
-- **推論のみをサポートする**（学習エンジンは実装しない。`docs/record.ja.md`参照）。
+- **推論のみをサポートする**（学習エンジンは実装しない）。
 - モデルのバイナリフォーマットは、KyTeaのモデルファイルを直接パースする（変換ツールを挟まない）。
 - **分かち書き専用**（タグ推定は行わない）。
 
@@ -365,7 +363,7 @@ SegmentLibMLP <version>\n
 
 ### 4.8 評価結果（現在の実測値）
 
-比較は入手可能なコーパス（UD_Japanese-GSD、CC BY-SA 4.0）でKyTeaを再学習し、同一データ・同一辞書で学習したMLPバックエンドと突き合わせる形で行っている（配布モデルの学習コーパスは入手不可のため。詳細な経緯は`docs/record.ja.md`）。
+比較は入手可能なコーパス（UD_Japanese-GSD、CC BY-SA 4.0）でKyTeaを再学習し、同一データ・同一辞書で学習したMLPバックエンドと突き合わせる形で行っている（配布モデルの学習コーパスは入手不可のため）。
 
 **精度**（`scripts/eval_segmentation.py`、境界F値）：
 
@@ -706,7 +704,6 @@ cpp-segmentlib/
 │   └── strip_kytea_tags.py
 ├── docs/
 │   ├── design.ja.md / design.md
-│   ├── record.ja.md              # 開発経緯・撤回・負の結果
 │   ├── mlp_module_design.ja.md / mlp_module_design.md
 │   └── mlp_impl_design.ja.md / mlp_impl_design.md
 ├── .github/workflows/ci.yml
@@ -775,11 +772,9 @@ cpp-segmentlib/
 
 **知見**：segmentlibはKyTeaとバイト完全一致しながらシングルスレッド推論5倍以上、ロードも速い。Vaporettoはシングルスレッドでは依然最速（出力は厳密には非一致、0.44%）だが、segmentlibはマルチスレッド化でVaporettoのシングルスレッドを上回る（8スレッドで約5.2倍）。
 
-推論最適化の過程（試行錯誤の記録）は`docs/record.ja.md`を参照。
-
 ## 10. 既知の制限・未実装機能
 
-- **タグ推定（品詞・読み）**：行わない。分かち書き専用（経緯は`docs/record.ja.md`）。
+- **タグ推定（品詞・読み）**：行わない。分かち書き専用。
 - **KyTea互換の学習エンジン**：実装しない。`segmenter train --backend kytea`は明示的エラーを返す。KyTea互換モデルが必要な場合は本物の`train-kytea`を使う。
 - **Vaporetto互換バックエンド**：作らない。Vaporettoは外部ベンチマーク比較対象としてのみ使用する。
 - **`--encode`**：実装しない。入力は常にUTF-8固定。
