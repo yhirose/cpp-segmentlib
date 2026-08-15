@@ -8,7 +8,7 @@
 // The headline "inference speed" figure uses tokenize() (word segmentation
 // only; this library predicts no tags) to stay apples-to-apples with
 // bench_kytea.cpp (calculateWS only) and Vaporetto (segmentation only) — see
-// docs/design.ja.md 10.1's "conditions fixed" methodology.
+// docs/design.ja.md 9.1's "conditions fixed" methodology.
 //
 //   bench_segment <model> <corpus> [iterations]
 

@@ -31,7 +31,7 @@ std::expected<Segmenter, Error> Segmenter::load_mlp(const std::filesystem::path&
 
 std::expected<Segmenter, Error> Segmenter::load(const std::filesystem::path& model_path) {
     // Auto-detection by the file's leading bytes: the MLP format opens with
-    // its ASCII signature line (design.ja.md 5.7); KyTea models start with
+    // its ASCII signature line (design.ja.md 4.7); KyTea models start with
     // "KyTea " and anything unrecognized falls through to the KyTea loader's
     // own diagnostics. (Vaporetto's zstd magic joins here later.)
     std::ifstream in(model_path, std::ios::binary);

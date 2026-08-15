@@ -66,7 +66,7 @@ void score_loop(const Model& model, const EncodedEgc& enc, Workspace& ws,
     }
 }
 
-// The Int16 production path (design.ja.md 5.6), fused: each boundary's whole
+// The Int16 production path (design.ja.md 4.6), fused: each boundary's whole
 // hidden-unit pass — b1 init, the 2w window-slot saturating adds, active dict
 // columns, relu, and the output dot — runs in one register-resident sweep
 // (kernels::fused_score_i16) instead of ~2w+3 separate full-width passes over

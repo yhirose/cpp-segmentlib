@@ -40,7 +40,7 @@ void Dataset::fill_batch(std::size_t index, std::span<const float> embedding,
         out.targets[b] = ex.label;
 
         // Window slots j = 0..2w-1 cover sentence-local EGCs
-        // boundary - w + 1 + j (design.ja.md 5.4); out-of-range slots are the
+        // boundary - w + 1 + j (design.ja.md 4.4); out-of-range slots are the
         // PAD pseudo-EGC (single constituent row kPadRow).
         float* x_row = out.x.data() + static_cast<std::size_t>(b) * in_dim;
         for (std::uint32_t j = 0; j < slots; ++j) {

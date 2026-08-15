@@ -13,7 +13,7 @@ namespace segmentlib::unicode {
 // Version of the Unicode data the generated grapheme-break property table was
 // built from, encoded as major*100 + minor (16.0 -> 1600). UAX #29 rules and
 // property assignments can change between Unicode versions, so model files
-// record the version they were trained with (design.ja.md 5.7 field 4b) and
+// record the version they were trained with (design.ja.md 4.7 field 4b) and
 // the loader warns when it differs from this segmenter's tables.
 inline constexpr std::uint16_t kEgcUnicodeVersion = 1600;
 

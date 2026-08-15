@@ -9,7 +9,7 @@
 namespace segmentlib::mlp {
 
 // Which numeric representation the first-layer table and accumulator use
-// (design.ja.md 5.6):
+// (design.ja.md 4.6):
 //  - Int32: the first implementation — no clipping anywhere, bit-exact with
 //    the trainer's int16 reference forward (train/quantize.cpp). The
 //    verification path.
@@ -36,9 +36,9 @@ inline constexpr int kAccShift = 9;
     return static_cast<std::int16_t>(std::clamp(shifted, -32768, 32767));
 }
 
-// The first-layer precompute table of design.ja.md 5.6 (NNUE style):
+// The first-layer precompute table of design.ja.md 4.6 (NNUE style):
 // table[egc][j] = W1_j · v(egc) in the accumulator integer scale S_acc
-// (mlp_impl_design.ja.md I.1-(1)), built at load time from the quantized
+// built at load time from the quantized
 // embedding and W1.
 //
 // The first implementation's frequent-EGC set (I.4): every single-codepoint

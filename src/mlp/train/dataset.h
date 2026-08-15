@@ -8,7 +8,7 @@
 
 #include "mlp/train/example.h"
 
-// Minibatch assembly (mlp_impl_design.ja.md II.1/II.5): shuffle example
+// Minibatch assembly: shuffle example
 // indices, then per batch gather embedding rows and mean-pool them into the
 // dense input matrix X the GEMMs consume.
 

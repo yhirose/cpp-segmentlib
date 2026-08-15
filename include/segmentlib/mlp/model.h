@@ -30,10 +30,10 @@ struct Config {  // 5.7 fields 1-4b
     std::uint16_t unicode_version = 0;
 };
 
-// An immutable loaded MLP model (mlp_module_design.ja.md 2.4): the raw
+// An immutable loaded MLP model: the raw
 // quantized parameters from the file, plus the load-time derived structures —
 // precompute table, dictionary matcher, dictionary columns and biases already
-// converted to accumulator integer scale (mlp_impl_design.ja.md I.4). All the
+// converted to accumulator integer scale. All the
 // scorer touches is integers; no scale multiplication survives into the hot
 // path.
 //

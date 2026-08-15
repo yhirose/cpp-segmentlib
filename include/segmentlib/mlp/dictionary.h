@@ -13,7 +13,7 @@
 
 namespace segmentlib::mlp {
 
-// Dictionary binary features (design.ja.md 5.4): per dictionary, position
+// Dictionary binary features (design.ja.md 4.4): per dictionary, position
 // relation {L: match starts right after the boundary, I: match spans it,
 // R: match ends right at it} × length bucket min(EGC-length, 4). The index
 // within a dictionary is `position*4 + (bucket-1)`; the global index is
@@ -36,7 +36,7 @@ struct DictFeatures {
     std::vector<std::vector<std::uint32_t>> per_boundary;
 };
 
-// The dictionary feature extractor (mlp_module_design.ja.md 2.3): words are
+// The dictionary feature extractor: words are
 // normalized, EGC-split, interned to dictionary-local EGC ids and compiled
 // into one runtime-built Aho-Corasick over EGC ids. Input EGCs are keyed by
 // their normalized codepoint sequence (EncodedEgc::egc_cps), never by

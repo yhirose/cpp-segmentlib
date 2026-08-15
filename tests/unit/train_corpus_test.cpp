@@ -17,7 +17,7 @@ constexpr BoundaryTag U = BoundaryTag::Unknown;
 }  // namespace
 
 TEST_CASE("full corpus: words become Bound gaps, tags are stripped") {
-    // The documented example line (design.ja.md 6.1).
+    // The documented example line (design.ja.md 5.1).
     const auto result =
         parse_full_corpus("コーパス/ko:pasu の/no 文/buN で/de す/su 。/.");
     REQUIRE(result.has_value());
@@ -53,7 +53,7 @@ TEST_CASE("full corpus: empty lines and repeated spaces are skipped") {
 }
 
 TEST_CASE("partial corpus: the documented example line") {
-    // design.ja.md 6.2.
+    // design.ja.md 5.2.
     const auto result = parse_partial_corpus(
         "ヴ-ェ-ネ-ツ-ィ-ア|は|イ-タ-リ-ア|に|あ り ま す|。");
     REQUIRE(result.has_value());

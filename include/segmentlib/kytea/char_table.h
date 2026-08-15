@@ -83,7 +83,7 @@ enum class CharType : std::uint8_t { Romaji, Hiragana, Katakana, Digit, Kanji, O
 
 // KyTea's fixed half-width -> full-width (and punctuation) normalization.
 // The implementation lives in unicode/normalize.h (it is shared with the MLP
-// backend, design.ja.md 5.5 方式(a)); re-exported here so existing kytea code
+// backend, design.ja.md 4.5 方式(a)); re-exported here so existing kytea code
 // keeps referring to kytea::normalize.
 using unicode::normalize;
 

@@ -9,7 +9,7 @@
 
 namespace segmentlib::mlp {
 
-// The MLP segmentation backend (mlp_module_design.ja.md 2.6): same shape as
+// The MLP segmentation backend: same shape as
 // kytea::KyteaBackend. Word segmentation only.
 class MlpBackend {
 public:

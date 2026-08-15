@@ -20,7 +20,7 @@ class AhoCorasickBuilder;
 // This is the *construction* counterpart of kytea::Automaton, which is a
 // read-only decoder for automata that arrive fully built inside a KyTea model
 // file. Here the patterns arrive as flat lists (the MLP model's dictionary
-// words, design.ja.md 5.7 field 17; Vaporetto's word lists, 4.5) and the
+// words, design.ja.md 4.7 field 17; Vaporetto's word lists, 4.5) and the
 // automaton is built at load time. The two are deliberately separate: they
 // share no on-disk format, and this one is keyed by an arbitrary Key type
 // (the MLP backend uses interned EGC ids rather than codepoints).

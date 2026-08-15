@@ -15,7 +15,7 @@
 #include "segmentlib/mlp/scorer.h"
 
 // End-to-end train → quantize → export → load → infer
-// (mlp_impl_design.ja.md III.4), plus the bit-exactness contract: the
+// plus the bit-exactness contract: the
 // inference scorer must reproduce the trainer's int16 reference decisions
 // exactly — the precompute table is a cache, not an approximation.
 

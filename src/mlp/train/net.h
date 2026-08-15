@@ -8,9 +8,9 @@
 #include "mlp/train/dataset.h"
 #include "mlp/train/example.h"
 
-// The fp32 network (mlp_impl_design.ja.md 第II部): forward pass, masked BCE
+// The fp32 network: forward pass, masked BCE
 // loss and backward pass over the one-hidden-layer pointwise classifier of
-// design.ja.md 5.4, with the heavy lifting delegated to ComputeBackend GEMMs.
+// design.ja.md 4.4, with the heavy lifting delegated to ComputeBackend GEMMs.
 
 namespace segmentlib::mlp::train {
 

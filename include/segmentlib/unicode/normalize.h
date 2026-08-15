@@ -3,7 +3,7 @@
 namespace segmentlib::unicode {
 
 // KyTea's fixed half-width -> full-width (and punctuation) normalization
-// ("方式(a)", design.ja.md 5.5): the same table KyTea applies before feature
+// ("方式(a)", design.ja.md 4.5): the same table KyTea applies before feature
 // extraction, promoted here so every backend (KyTea, MLP, and later
 // Vaporetto) normalizes input — and dictionary entries — identically without
 // depending on the kytea namespace. Returns the normalized codepoint, or `cp`

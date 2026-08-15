@@ -6,8 +6,7 @@
 #include "mlp/train/example.h"
 #include "mlp/train/net.h"
 
-// Post-training quantization (design.ja.md 5.5/5.9, mlp_impl_design.ja.md
-// II.6): weights go to int16 with max-abs scales (no clipping — outlier
+// Post-training quantization (design.ja.md 4.5/4.9): weights go to int16 with max-abs scales (no clipping — outlier
 // weights carry the strongest evidence), the accumulator scale S_acc is
 // calibrated from the first-layer activation distribution, and the result is
 // validated by comparing fp32 decisions against an int16 reference forward

@@ -21,10 +21,10 @@ namespace segmentlib::bytes {
 //  - other trivially-copyable values (notably double) are raw host bytes —
 //    on our little-endian targets that is little-endian on disk, and
 //    big-endian hosts are a known deferred concern shared with the reader
-//    (design.ja.md 5.7);
+//    (design.ja.md 4.7);
 //  - strings are NUL-terminated, header lines '\n'-terminated.
 //
-// Used by the model exporters (e.g. the MLP trainer, design.ja.md 5.7). The
+// Used by the model exporters (e.g. the MLP trainer, design.ja.md 4.7). The
 // buffer is accumulated in memory and handed to the caller with data()/take();
 // model files are small enough (tens of MB) that this beats streaming I/O in
 // simplicity without a meaningful memory cost.

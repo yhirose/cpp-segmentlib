@@ -4,28 +4,31 @@
 #include <cstddef>
 #include <cstdint>
 
-// The three SIMD kernels of the MLP scoring hot path (mlp_impl_design.ja.md
-// I.3), in int32 (first implementation) and int16 (requantized table, 5.6の
-// 後段最適化) variants:
+// The SIMD kernels of the MLP scoring hot path (design.ja.md 4.6), in int32
+// (first implementation) and int16 (requantized table, the follow-up
+// optimization in 4.6) variants:
 //
 //   add       acc[h] += src[h]              (int32; int16 is *saturating*)
 //   relu      acc[h]  = max(acc[h], 0)
 //   dot       Σ_h w2[h] · acc[h] → int64    (the output layer product)
-//
-// plus one widening add shared with the KyTea backend's tag scorer (its
-// numWeights-wide int16 weight blocks accumulate into int32 scores — the
-// hottest loop of tag prediction, design.ja.md 9.2.1; the kernel is a plain
-// integer op, not MLP-specific, so it lives with the others):
-//
 //   add_widen acc[h] += src[h]              (int16 src → int32 acc, exact)
 //
+// plus `fused_score_i16`, which runs the whole per-boundary sequence (b1 init →
+// window adds → dictionary columns → relu → output dot) in one register-
+// resident sweep. That is the kernel the Int16 path actually uses; the separate
+// int16 add/relu/dot and `add_widen` are currently exercised only by the tests
+// (`add_widen` dates from the tag scorer, removed in 8f3708b).
+//
 // `kernels::scalar` is the always-compiled reference implementation — the
-// oracle the SIMD paths are tested against (I.3) and the fallback for
-// platforms with neither NEON nor AVX2. The unqualified functions dispatch at
-// compile time: AArch64 always has NEON; x86 uses AVX2 when the translation
-// unit is built with it (-mavx2 / /arch:AVX2), scalar otherwise. The int32
-// kernels are bit-exact with scalar on every path (integer adds/products are
-// associative); the int16 kernels share exact saturating semantics.
+// oracle the SIMD paths are tested against, and the fallback for platforms with
+// neither NEON nor AVX2. The unqualified functions dispatch at compile time:
+// AArch64 always has NEON; x86 uses AVX2 when the translation unit is built
+// with it (-mavx2 / /arch:AVX2), scalar otherwise. The int32 kernels are
+// bit-exact with scalar on every path (integer adds/products are associative).
+// The int16 kernels match too, with one known exception: AVX2 `dot_i16` uses
+// `_mm256_madd_epi16`, which saturates when both halves of a 32-bit pair are
+// -32768, so it can differ from scalar on inputs that are not relu-bounded.
+// `fused_score_i16` is unaffected because its dot always follows the relu.
 
 #if defined(__aarch64__) || defined(__ARM_NEON)
 #define SEGMENTLIB_KERNELS_NEON 1

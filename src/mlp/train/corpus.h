@@ -11,7 +11,7 @@
 
 // Training-side KyTea corpus readers (design.ja.md 6節). These headers live
 // under src/ (not include/): the training pipeline is a development tool and
-// has no public headers (mlp_module_design.ja.md 0節).
+// has no public headers.
 
 namespace segmentlib::mlp::train {
 

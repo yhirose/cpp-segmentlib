@@ -11,8 +11,7 @@
 #include "segmentlib/mlp/vocab.h"
 #include "segmentlib/types.h"
 
-// Model export in the 5.7 format (design.ja.md 5.7, mlp_impl_design.ja.md
-// II.7): header line, config, the five scales, vocabulary, int16 tensors,
+// Model export in the 4.7 format (design.ja.md 4.7): header line, config, the five scales, vocabulary, int16 tensors,
 // raw-double biases, then the raw dictionary word lists. Derived structures
 // (precompute table, Aho-Corasick, requantized biases) are deliberately not
 // written — the loader rebuilds them (5.7 ロード時の処理).

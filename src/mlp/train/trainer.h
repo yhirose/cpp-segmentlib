@@ -9,9 +9,9 @@
 #include "mlp/train/example.h"
 #include "mlp/train/net.h"
 
-// The training loop (mlp_module_design.ja.md 3節): epochs of shuffled
+// The training loop: epochs of shuffled
 // minibatches, per-epoch dev evaluation on boundary F1, early stopping on a
-// patience counter (design.ja.md 5.9).
+// patience counter (design.ja.md 4.9).
 
 namespace segmentlib::mlp::train {
 

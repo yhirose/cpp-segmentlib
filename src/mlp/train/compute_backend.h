@@ -3,8 +3,7 @@
 #include <cstddef>
 #include <memory>
 
-// The training compute abstraction (design.ja.md 5.9, mlp_module_design.ja.md
-// 3.1): matrix products, activations and elementwise ops behind a virtual
+// The training compute abstraction (design.ja.md 4.9): matrix products, activations and elementwise ops behind a virtual
 // interface, so CPU (BLAS) / CUDA / Metal implementations can be swapped at
 // startup. Training is fp32; virtual dispatch is irrelevant next to the GEMM
 // cost. Inference never touches this (int16 hand-written kernels, 5.6).

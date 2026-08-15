@@ -24,7 +24,7 @@ namespace segmentlib {
 class Segmenter {
 public:
     // Loads a model, auto-detecting its format: a "SegmentLibMLP " header
-    // line selects the MLP backend (design.ja.md 5.7), anything else is
+    // line selects the MLP backend (design.ja.md 4.7), anything else is
     // treated as a KyTea binary model.
     static std::expected<Segmenter, Error> load(const std::filesystem::path& model_path);
 

@@ -38,7 +38,7 @@ if(SEGMENTLIB_BUILD_TRAINING)
         mlp/train/quantize.cpp
         mlp/train/exporter.cpp
     )
-    # Training headers are internal (no public headers, mlp_module_design 0節);
+    # Training headers are internal (no public headers);
     # consumers of this target (CLI train, tests) include them as
     # "mlp/train/*.h" relative to src/.
     target_include_directories(segmentlib_train
@@ -46,7 +46,7 @@ if(SEGMENTLIB_BUILD_TRAINING)
     target_link_libraries(segmentlib_train PUBLIC segmentlib)
     target_link_libraries(segmentlib_train PRIVATE segmentlib_warnings)
 
-    # BLAS is linked here and nowhere else (design.ja.md 5.9).
+    # BLAS is linked here and nowhere else (design.ja.md 4.9).
     if(APPLE)
         set(SEGMENTLIB_BLAS "Accelerate" CACHE STRING
             "BLAS implementation for training (Accelerate|OpenBLAS|MKL)")

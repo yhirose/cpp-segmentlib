@@ -8,7 +8,7 @@
 
 // The dispatched kernels (NEON on this machine; AVX2 on x86 builds with it;
 // otherwise scalar pass-through) must be bit-exact with the scalar reference
-// (mlp_impl_design.ja.md I.3: scalar is the oracle). Sizes include non-lane-
+// (scalar is the oracle). Sizes include non-lane-
 // multiple tails, and the int16 inputs include saturation-triggering extremes.
 
 using namespace segmentlib::mlp;

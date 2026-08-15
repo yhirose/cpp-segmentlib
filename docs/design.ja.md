@@ -47,7 +47,7 @@ private:
 };
 ```
 
-**モデル形式の自動判別**：`Segmenter::load()`はファイル先頭のシグネチャを見て自動的にバックエンドを選ぶ（KyTeaモデルは`"KyTea "`で始まるヘッダ行を持つ、それ以外は独自MLP形式として扱う、4.7節）。明示的にバックエンドを指定したい場合向けに`load_kytea(path)` / `load_mlp(path)`も用意し、`load()`はその薄いラッパーとする。
+**モデル形式の自動判別**：`Segmenter::load()`はファイル先頭のシグネチャを見て自動的にバックエンドを選ぶ（`"SegmentLibMLP "`で始まるヘッダ行ならMLPバックエンド、4.7節。それ以外はKyTeaバックエンドにフォールスルーする）。明示的にバックエンドを指定したい場合向けに`load_kytea(path)` / `load_mlp(path)`も用意し、`load()`はその薄いラッパーとする。
 
 各バックエンドクラスは`tokenize`という同一シグネチャさえ満たせばよく、内部の特徴抽出・分類器・モデルパーサは完全に独立して実装できる。2つのバックエンドの共通点は「同じ`Segments`型を返すこと」だけである。
 
@@ -82,7 +82,7 @@ KyTeaの`findType`は4バイトUTF-8（コードポイント≧U+10000、CJK拡�
 
 **入力の正規化（`normalize`）**
 
-推論時、KyTeaは入力文字列を`surface`（原文）と`norm`（正規化）に分け、素性計算（文字n-gram・文字種n-gram）はすべて`norm`に対して行う。正規化は固定テーブル（約110エントリ）で、**半角英数字・記号を全角へ畳む**（`a→ａ`, `0→０`, `(→（`, 半角カナ記号`｢｣→「」`等）ものである。出力の単語表層は`surface`（原文のバイト列）から切り出すが、境界判定に使うスコアは`norm`から計算される。本ライブラリはこの固定テーブルを移植し、**UTF-8デコード→コードポイント正規化→インターン**の順で`norm`相当のID列を作る（`CharTable::encode`）。
+推論時、KyTeaは入力文字列を`surface`（原文）と`norm`（正規化）に分け、素性計算（文字n-gram・文字種n-gram）はすべて`norm`に対して行う。正規化は固定テーブル（96エントリ）で、**半角英数字・記号を全角へ畳む**（`a→ａ`, `0→０`, `(→（`, 半角カナ記号`｢｣→「」`等）ものである。出力の単語表層は`surface`（原文のバイト列）から切り出すが、境界判定に使うスコアは`norm`から計算される。本ライブラリはこの固定テーブルを移植し、**UTF-8デコード→コードポイント正規化→インターン**の順で`norm`相当のID列を作る（`CharTable::encode`）。
 
 **素性文字列のフォーマット**
 
@@ -108,7 +108,7 @@ KyTeaのモデルは学習時の素性文字列→ID辞書をモデルファイ�
 KyTea <version> <T|B> <encoding>
 ```
 
-例：`KyTea 0.4.0 B utf8`。`version`は量子化ビルドでは`"0.4.0"`。フォーマット文字は`T`=テキスト、`B`=バイナリ。本ライブラリは`0.4.0`系のバイナリ形式のみを対象とする。このヘッダ行の`"KyTea "`シグネチャは、2節で述べたバックエンド自動判別にも使う。
+例：`KyTea 0.4.0 B utf8`。`version`は量子化ビルドでは`"0.4.0"`。フォーマット文字は`T`=テキスト、`B`=バイナリ。本ライブラリは`0.4.0`系のバイナリ形式のみを対象とする。2節のバックエンド自動判別が見るのはこの行ではなくMLP側のシグネチャで、`"SegmentLibMLP "`で始まらないファイルがこのパーサに回ってくる。
 
 **ファイル全体のセクション順序**
 
@@ -309,7 +309,7 @@ y = dot(w2, h) + b2      （256次元内積 1 回）
 
 **事前計算テーブル**：頻出EGC（≒頻出コードポイント）について構築。稀なEGCは「コードポイント埋め込み→mean→W1_jを掛ける」合成経路にフォールバックする。
 
-**SIMDカーネル**：`include/segmentlib/mlp/kernels.h`（ヘッダオンリー）にadd/relu/dot×int32/int16の6カーネル＋`add_widen_i16_i32`。`kernels::scalar::*`が常時コンパイルされるoracle、ディスパッチはコンパイル時（AArch64→NEON、x86は`__AVX2__`定義時のみAVX2、他はscalar）。NEON・AVX2ともbit一致テストで実機検証済み（NEON=ローカルARM実機、AVX2=CI ubuntu-24.04実機＋Windows MSVC実機）。
+**SIMDカーネル**：`include/segmentlib/mlp/kernels.h`（ヘッダオンリー）にadd/relu/dot×int32/int16の6カーネル＋`add_widen_i16_i32`、およびInt16経路が実際に走らせる融合カーネル`fused_score_i16`（4.8節）。`kernels::scalar::*`が常時コンパイルされるoracle、ディスパッチはコンパイル時（AArch64→NEON、x86は`__AVX2__`定義時のみAVX2、他はscalar）。NEON・AVX2ともbit一致テストで実機検証済み（NEON=ローカルARM実機、AVX2=CI ubuntu-24.04実機＋Windows MSVC実機）。
 
 **thread_localスクラッチ**：`mlp_backend.cpp`内の`Scratch{EncodedEgc,Workspace,scores}`、per-call割当ゼロ。
 
@@ -375,15 +375,6 @@ SegmentLibMLP <version>\n
 
 辞書なし・既定構成（w=5, d=64, H=256, seed=42）での結果。量子化による判定反転はUD-GSD実モデルでdev+train 290,024境界中0件。seed起因のF1変動は±0.05pt程度（5 seedで実測）。**辞書なしでは本MLPは線形モデル（KyTea/Vaporetto）に約0.7〜1.0pt負ける**。KyTeaとVaporettoはほぼ互角。
 
-**辞書なしで線形モデルに負ける原因の分析**（境界単位の突き合わせ。差はMcNemar検定で有意：MLPのみ誤り327/KyTeaのみ誤り85（GSD, z=11.9）、542/158（PUD, z=14.5））：
-
-- **負けの主因は「見たことはあるが局所的に曖昧なバイグラム」＝語彙的記憶の容量不足**。境界を挟む2文字が学習データで「結合でも分割でも」出現する局所曖昧バイグラムの割合は、全境界17.1%（GSD）/15.5%（PUD）に対し、MLPのみ誤りでは**27.5%/28.4%**に濃縮。こうした境界は局所では決まらず、正確な語彙パターン（「ですね」「とんでもない」等のn-gram全体）の記憶で解くしかない。KyTea/Vaporettoは疎な明示n-gram素性（GSD学習で約89万素性）が実質的な記憶テーブルとして働くのに対し、本MLPのパラメータ（埋め込み15万＋W1 16万程度）は語彙例外の記憶容量がはるかに小さい。
-- **逆に、学習未出現バイグラムではMLPが相対的に強い**（合成的埋め込みの汎化が機能している証拠）。境界バイグラムが学習未出現の割合は、KyTeaのみ誤りで**42.4%/42.4%**と、MLPのみ誤りの30.3%/30.1%より高い——未出現n-gramでは素性が発火しない線形モデルの方が脆い。つまり「表現の汎化」はMLPの狙いどおり働いており、負けているのは記憶側。
-- **稀な文字への偏りも実在する**（副次要因）。MLPのみ誤りでは、境界を挟む稀少側文字の学習頻度中央値が131/150と全境界（327/362）の半分以下、学習頻度2未満（≒UNK）の割合は2.8%/7.4%と全境界（0.5%/1.0%）の5〜7倍。64次元埋め込みは低頻度文字で安定しない。out-of-domain（PUD）ではカタカナ連続境界の誤りが急増し、OOV外来語・固有名詞の連結失敗が上乗せされる。
-- **対策の含意**：記憶不足が主因なので、(1) **辞書素性**（学習コーパスから抽出した語リストでもよい）が最も直接的——語彙知識を全境界にショートカット注入する、(2) 埋め込み次元・隠れ幅の増強は記憶容量を足すが速度とトレードオフ、(3) 文字種の全スロット入力（4.1節の拡張余地）は稀少文字・OOV側に効きうる。なお**OOVコードポイントのUNK行をGeneral Categoryで分割する案は実験済みで効果なし**（マルチseed A/BでΔ=0.00pt）——稀少「文字」の問題は文字種の粒度では救えず、負けの本体は語彙記憶側にある。
-
-辞書素性（学習コーパス自己抽出、`scripts/extract_dict.py`）も検証したが、精度改善（GSD +0.45pt）に対して速度低下が大きすぎる（5.11→2.67 M chars/sec、約48%減）ため不採用。
-
 **速度**（M1 Pro、`bench/bench_segment`、int16+NEON、best-of-8）：
 
 | ジャンル | MLP | 実KyTea | 比 |
@@ -392,8 +383,6 @@ SegmentLibMLP <version>\n
 | PUD test（news対訳、48K字） | 5.60 M chars/sec | 1.58 M chars/sec | 3.54x |
 
 分割速度はジャンルに非感受（スコア計算はEGC窓の整数演算のみで語彙・文体に依存しない）。
-
-**Int16スコアリングの融合カーネル**（プロファイル駆動の追加最適化）：per-boundaryのスコア計算は、プロファイル（`sample`、M1 Pro）で自己時間の71.5%が「2w個のテーブルブロックをアキュムレータへ飽和加算するループ」に集中しており、その大半がアキュムレータのL1往復（load-block/load-acc/store-accがadd 1回につき3メモリ操作）という冗長なコストだと判明した（作業集合は文あたり数百KBでL2常駐、DRAM帯域律速ではない）。`kernels::fused_score_i16`は、この「b1初期化 → 2w回の窓加算 → 辞書列加算 → ReLU → 出力dot」を、アキュムレータのHチャンクをSIMDレジスタに載せたまま1パスで通す形に融合し、境界ごとに発生していた約2w+3回のフルH幅アキュムレータ往復を1回のレジスタ常駐スイープに置き換える。境界間でのインクリメンタル更新（NNUEのチェス実装が使う定石）は、同じ文字でも窓内の位置jが変わると別のW1列を参照するため構造的に成立しない——2w回の窓寄与の計算自体は変わらず、それを運ぶメモリトラフィックだけを削っている。int16飽和加算はブロックを加算する順序に結果が依存するため、融合カーネルは旧実装と同じ順序（窓位置→辞書列）で飽和加算し、既存のInt16↔Int32判定反転テストでバイト完全一致を確認している（精度・判定は不変）。単スレッド速度は約1.4〜1.5倍向上（GSD train: 3.5M→5.11M chars/sec）。
 
 ### 4.9 学習側の設計（C++自前実装）
 
@@ -529,6 +518,14 @@ public:
     static std::expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
     static std::expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
 
+    // Move-only: a Segmenter owns its model outright, so an implicit copy
+    // would silently duplicate all of it (~400MB for the distributed KyTea
+    // model). Share one with `const Segmenter&`.
+    Segmenter(const Segmenter&) = delete;
+    Segmenter& operator=(const Segmenter&) = delete;
+    Segmenter(Segmenter&&) = default;
+    Segmenter& operator=(Segmenter&&) = default;
+
     std::expected<Segments, Error> tokenize(std::string_view text) const;
 
     std::vector<std::expected<Segments, Error>> tokenize_all(
@@ -536,8 +533,9 @@ public:
 };
 ```
 
-- 分かち書きのみを行う`tokenize()`一本。多数の入力を並列に分かち書きする`tokenize_all()`（`threads==0`でハードウェア並列数、9節：M1 Pro 8スレッドで単スレッド比5.6×）。
+- 分かち書きのみを行う`tokenize()`一本。多数の入力を並列に分かち書きする`tokenize_all()`（`threads==0`でハードウェア並列数、9節：M1 Pro 8スレッドで44.98 M chars/sec、単スレッド比7.96×）。
 - 空文字列の入力は「エラーではなく空の結果」として扱う（`Segments{}`）。`Error`はUTF-8不正やモデル未読込・未対応形式などの実際の異常系のみに使う。
+- ロード済みの`Segmenter`は不変で、呼び出しごとの作業領域は`thread_local`なので、同一の`const Segmenter&`に対して任意個のスレッドから同時に`tokenize()` / `tokenize_all()`を呼べる。共有はコピーではなくこの形で行う。
 
 ## 7. CLIインターフェース
 
@@ -557,7 +555,7 @@ KyTea / Vaporettoと同様、**標準入力からテキストを読み、標準�
 | オプション | 説明 |
 |---|---|
 | `--model <path>` | モデルファイルのパス（必須）。KyTea互換／独自MLPのいずれかを自動判別する（2節） |
-| `--threads <n>` | 並列実行のスレッド数（`0`＝`hardware_concurrency()`、既定） |
+| `--threads <n>` | 並列実行のスレッド数（`0`＝`hardware_concurrency()`、既定。上限1024） |
 
 **出力フォーマット**
 
@@ -612,7 +610,8 @@ KyTea互換モデルの学習が必要な場合は、本物の`train-kytea`（Ho
 ```
 include/segmentlib/
 ├── bytes/
-│   └── binary_reader.h        # (L1) プリミティブなバイナリ読み取りカーソル
+│   ├── binary_reader.h        # (L1) プリミティブなバイナリ読み取りカーソル
+│   └── binary_writer.h        # (L1) 対になる書き出しカーソル（学習側のexporterが使う）
 ├── unicode/
 │   ├── utf8.h                 # (L1) UTF-8デコード/エンコードの純粋関数群
 │   ├── egc.h                  # (L1) UAX #29 EGC分割
@@ -638,7 +637,8 @@ include/segmentlib/
 └── types.h                     # Segments/Error（6.2節、依存なし）
 
 src/
-├── kytea/{char_table,automaton,model,scorer,kytea_backend}.cpp
+├── kytea/{char_table,model,scorer,kytea_backend}.cpp   # automaton.h はヘッダオンリー
+├── unicode/{utf8,egc,normalize}.cpp
 ├── mlp/{vocab,dictionary,precompute,model,scorer,mlp_backend}.cpp
 ├── mlp/train/                  # 学習コンポーネント（SEGMENTLIB_BUILD_TRAINING時のみビルド）
 │   ├── corpus.{h,cpp}           # KyTeaコーパスパーサ
@@ -710,15 +710,13 @@ cpp-segmentlib/
 │   ├── fetch_ud_pud_corpus.sh
 │   ├── convert_ud_gsd_corpus.py
 │   ├── eval_segmentation.py
+│   ├── extract_dict.py
+│   ├── gen_egc_table.py
 │   └── strip_kytea_tags.py
 ├── docs/
-│   ├── design.ja.md / design.md
-│   ├── mlp_module_design.ja.md / mlp_module_design.md
-│   └── mlp_impl_design.ja.md / mlp_impl_design.md
+│   └── design.ja.md / design.md
 ├── .github/workflows/ci.yml
-├── .gitignore
-├── .clang-format
-└── .clang-tidy
+└── .gitignore
 ```
 
 **設計判断**
@@ -742,7 +740,7 @@ cpp-segmentlib/
   ctest --test-dir build --output-on-failure
   ```
   ベンチマーク計測時は必ず`-DCMAKE_BUILD_TYPE=Release`を指定する（`Debug`構成では推論速度が数十倍遅くなる）。
-- **CI**：`.github/workflows/ci.yml`。macOS arm64（NEON）・Linux x86_64（AVX2/scalar、GCC14+OpenBLAS）・Windows（MSVC、AVX2、best-effort）の4ジョブ。goldenテストはモデル未取得時に自動スキップ。
+- **CI**：`.github/workflows/ci.yml`。macOS arm64（NEON）・Linux x86_64（AVX2/scalar、GCC14+OpenBLAS）・Windows（MSVC、AVX2、best-effort）に加え、ASan+UBSanジョブ（assertion有効なのはこれだけ）と、KyTeaモデルを取得（キャッシュ付き）して`SEGMENTLIB_REQUIRE_GOLDEN`を立てるgoldenジョブの計6ジョブ。この環境変数によりモデル未取得はスキップではなく失敗になる。全ジョブ`-DSEGMENTLIB_WARNINGS_AS_ERRORS=ON`でビルド。
 
 ## 9. ベンチマーク（推論速度）
 

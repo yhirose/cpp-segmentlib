@@ -9,7 +9,7 @@
 
 namespace segmentlib::mlp {
 
-// Per-call buffers for the scorer (mlp_impl_design.ja.md I.5): the
+// Per-call buffers for the scorer: the
 // accumulator (whichever precision the model was loaded with) and the
 // dictionary-feature scratch. score_boundaries_into allocates nothing once
 // these have grown to the sentence's size, matching the kytea::scorer _into
@@ -26,7 +26,7 @@ struct Workspace {
 };
 
 // Scores every EGC boundary of `enc` (M-1 scores for M clusters): the int16
-// integer forward pass of design.ja.md 5.6 / mlp_impl_design.ja.md I.2,
+// integer forward pass of design.ja.md 4.6,
 // through the precision path the model was loaded with (model.h). A boundary
 // is predicted where the score is positive. Scores are the int64 output sum
 // saturated to int32 (the sign — the only thing inference uses — is

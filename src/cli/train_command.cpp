@@ -50,7 +50,7 @@ struct Options {
     std::string_view dev_corpus;  // full annotation; optional
     std::string_view model_out;
 
-    // MLP hyperparameters (design.ja.md 5.4 defaults).
+    // MLP hyperparameters (design.ja.md 4.4 defaults).
     std::uint32_t char_window = 5;
     std::uint32_t embed_dim = 64;
     std::uint32_t hidden = 256;

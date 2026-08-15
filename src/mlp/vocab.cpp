@@ -39,7 +39,7 @@ std::expected<void, Error> Vocab::encode_into(std::string_view utf8,
     out.offsets.clear();
 
     // Normalization is applied per codepoint *before* cluster segmentation
-    // (design.ja.md 5.5 方式(a)), so the breaker sees normalized codepoints;
+    // (design.ja.md 4.5 方式(a)), so the breaker sees normalized codepoints;
     // offsets still index the original bytes (normalization is 1:1 on
     // codepoints, so cluster spans carry over).
     unicode::GraphemeBreaker breaker;

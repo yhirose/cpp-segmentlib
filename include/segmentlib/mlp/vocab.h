@@ -12,7 +12,7 @@
 
 namespace segmentlib::mlp {
 
-// Reserved embedding rows (design.ja.md 5.7 field 9): row 0 is the PAD token
+// Reserved embedding rows (design.ja.md 4.7 field 9): row 0 is the PAD token
 // (window positions past the ends of the text), row 1 is UNK (codepoints not
 // in the vocabulary). Rows 2.. correspond to the model's sorted codepoint
 // array in order.
@@ -54,7 +54,7 @@ struct EncodedEgc {
     }
 };
 
-// The MLP model's codepoint vocabulary (design.ja.md 5.3/5.7): maps a
+// The MLP model's codepoint vocabulary (design.ja.md 4.3/4.7): maps a
 // codepoint to its embedding row. Corresponds to kytea::CharTable, but the
 // id space is embedding rows with reserved PAD/UNK rows, and there is no
 // character-type channel (5.1: no heuristic features).

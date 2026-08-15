@@ -47,7 +47,7 @@ private:
 };
 ```
 
-**Model format auto-detection**: `Segmenter::load()` selects the backend automatically by looking at the file's leading signature (KyTea models begin with a `"KyTea "` header line; anything else is treated as the custom MLP format, Section 4.7). `load_kytea(path)` / `load_mlp(path)` are also provided for explicitly specifying the backend; `load()` is a thin wrapper around them.
+**Model format auto-detection**: `Segmenter::load()` selects the backend automatically by looking at the file's leading signature (a `"SegmentLibMLP "` header line selects the MLP backend, Section 4.7; anything else falls through to the KyTea backend). `load_kytea(path)` / `load_mlp(path)` are also provided for explicitly specifying the backend; `load()` is a thin wrapper around them.
 
 Each backend class only needs to satisfy the `tokenize` signature; the internal feature extraction, classifier, and model parser can be implemented completely independently. The only thing the two backends have in common is "returning the same `Segments` type."
 
@@ -82,7 +82,7 @@ KyTea's `findType` has a bug in its 4-byte UTF-8 (codepoint ≥ U+10000, CJK Ext
 
 **Input normalization (`normalize`)**
 
-At inference, KyTea splits the input string into `surface` (original) and `norm` (normalized), and feature computation (character n-grams, character-type n-grams) is done entirely on `norm`. Normalization uses a fixed table (about 110 entries) that **folds half-width alphanumerics/symbols to full-width** (`a→ａ`, `0→０`, `(→（`, half-width kana punctuation `｢｣→「」`, etc.). Output word surfaces are cut from `surface` (the original byte string), but boundary-decision scores are computed from `norm`. This library ports the same fixed table, building the `norm`-equivalent id sequence via **UTF-8 decode → codepoint normalization → interning** (`CharTable::encode`).
+At inference, KyTea splits the input string into `surface` (original) and `norm` (normalized), and feature computation (character n-grams, character-type n-grams) is done entirely on `norm`. Normalization uses a fixed table (96 entries) that **folds half-width alphanumerics/symbols to full-width** (`a→ａ`, `0→０`, `(→（`, half-width kana punctuation `｢｣→「」`, etc.). Output word surfaces are cut from `surface` (the original byte string), but boundary-decision scores are computed from `norm`. This library ports the same fixed table, building the `norm`-equivalent id sequence via **UTF-8 decode → codepoint normalization → interning** (`CharTable::encode`).
 
 **Feature string format**
 
@@ -108,7 +108,7 @@ KyTea embeds the training-time feature-string→ID dictionary in the model file.
 KyTea <version> <T|B> <encoding>
 ```
 
-Example: `KyTea 0.4.0 B utf8`. `version` is `"0.4.0"` for quantized builds. The format character is `T`=text, `B`=binary. This library targets only the binary `0.4.0` format. This header line's `"KyTea "` signature is also used for backend auto-detection (Section 2).
+Example: `KyTea 0.4.0 B utf8`. `version` is `"0.4.0"` for quantized builds. The format character is `T`=text, `B`=binary. This library targets only the binary `0.4.0` format. Backend auto-detection (Section 2) keys on the MLP signature rather than this line: a file that does not start with `"SegmentLibMLP "` is handed to this parser.
 
 **Overall section order**
 
@@ -309,7 +309,7 @@ boundary ⇔ y > 0
 
 **Precomputed table**: built for frequent EGCs (≈ frequent codepoints). Rare EGCs fall back to a compositional path ("codepoint embedding → mean → multiply by W1_j").
 
-**SIMD kernels**: `include/segmentlib/mlp/kernels.h` (header-only) has 6 add/relu/dot kernels for int32/int16, plus `add_widen_i16_i32`. `kernels::scalar::*` is the always-compiled oracle; dispatch is compile-time (AArch64→NEON, x86 uses AVX2 only when `__AVX2__` is defined, otherwise scalar). Both NEON and AVX2 are bit-exactness-tested on real hardware (NEON = local ARM hardware, AVX2 = CI ubuntu-24.04 hardware + Windows MSVC hardware).
+**SIMD kernels**: `include/segmentlib/mlp/kernels.h` (header-only) has 6 add/relu/dot kernels for int32/int16, plus `add_widen_i16_i32` and the fused `fused_score_i16` that the Int16 path actually runs (Section 4.8). `kernels::scalar::*` is the always-compiled oracle; dispatch is compile-time (AArch64→NEON, x86 uses AVX2 only when `__AVX2__` is defined, otherwise scalar). Both NEON and AVX2 are bit-exactness-tested on real hardware (NEON = local ARM hardware, AVX2 = CI ubuntu-24.04 hardware + Windows MSVC hardware).
 
 **thread_local scratch**: `Scratch{EncodedEgc,Workspace,scores}` inside `mlp_backend.cpp`, zero per-call allocation.
 
@@ -375,15 +375,6 @@ Comparisons retrain KyTea and Vaporetto on an obtainable corpus (UD_Japanese-GSD
 
 No dictionary, default configuration (w=5, d=64, H=256, seed=42). Zero quantization-induced decision flips across dev+train, 290,024 boundaries, on the real UD-GSD model. Seed-induced F1 variation is about ±0.05pt (measured over 5 seeds). **Without a dictionary the MLP trails the linear models (KyTea/Vaporetto) by ~0.7–1.0pt**; KyTea and Vaporetto are roughly tied.
 
-**Analysis of why the MLP trails the linear models without a dictionary** (per-boundary comparison; the gap is significant by McNemar's test: MLP-only errors 327 vs KyTea-only 85 (GSD, z=11.9), 542 vs 158 (PUD, z=14.5)):
-
-- **The main cause is "seen but locally ambiguous bigrams" — insufficient lexical memorization capacity.** The share of boundaries whose straddling bigram occurs *both joined and split* in the training data is 17.1% (GSD) / 15.5% (PUD) over all boundaries, but **27.5% / 28.4%** among MLP-only errors. Such boundaries cannot be decided locally; they require memorizing the exact lexical pattern (the full n-gram of ですね, とんでもない, …). KyTea/Vaporetto's sparse explicit n-gram features (~890K features on GSD) act as a de-facto memorization table, whereas this MLP's parameters (~150K embedding + ~160K W1) have far less capacity for lexical exceptions.
-- **Conversely, on training-unseen bigrams the MLP is relatively stronger** — evidence the compositional embedding generalizes as intended. Among KyTea-only errors, **42.4% / 42.4%** of boundary bigrams are unseen in training, versus 30.3% / 30.1% for MLP-only errors: a linear model is more brittle where its exact n-gram features never fire. The MLP loses on the memorization side, not the generalization side.
-- **The rare-character skew is real but secondary.** Among MLP-only errors, the median training frequency of the rarer straddling character is 131/150 vs 327/362 over all boundaries, and the near-OOV share (<2 training occurrences) is 2.8%/7.4% vs 0.5%/1.0% — 5–7× over-represented. A 64-dim embedding is unstable at low frequency. Out-of-domain (PUD) adds a spike of katakana-run errors from failing to split OOV loanwords/proper nouns.
-- **Implications.** Since memorization is the bottleneck: (1) **dictionary features** (even a word list extracted from the training corpus) are the most direct fix — they inject lexical knowledge at every boundary; (2) larger embedding/hidden dims add memorization capacity at a speed cost; (3) character type as a per-slot input (the Section 4.1 leftover) may help the rare-character/OOV side. Note that **splitting the OOV UNK row by General Category was tried and had no effect** (multi-seed A/B, Δ=0.00pt) — the rare-*character* problem is not solved at character-type granularity, and the real deficit is lexical memory.
-
-Dictionary features (a self-extracted training-corpus dictionary, `scripts/extract_dict.py`) were also evaluated but rejected: the accuracy gain (GSD +0.45pt) came with too large a speed cost (5.11→2.67 M chars/sec, about −48%).
-
 **Speed** (M1 Pro, `bench/bench_segment`, int16+NEON, best-of-8):
 
 | Genre | MLP | Real KyTea | Ratio |
@@ -392,8 +383,6 @@ Dictionary features (a self-extracted training-corpus dictionary, `scripts/extra
 | PUD test (news translation, 48K chars) | 5.60 M chars/sec | 1.58 M chars/sec | 3.54x |
 
 Segmentation speed is genre-insensitive (score computation is pure integer arithmetic over the EGC window, independent of vocabulary or style).
-
-**Fused Int16 scoring kernel** (profile-driven follow-up optimization): profiling (`sample`, M1 Pro) showed 71.5% of self-time concentrated in the loop that saturating-adds the 2w table blocks into the accumulator, most of it redundant L1 round-trips on the accumulator (one add costs 3 memory ops: load block, load acc, store acc — the working set is a few hundred KB per sentence and stays L2-resident, so this is not DRAM-bandwidth bound). `kernels::fused_score_i16` fuses "init b1 → 2w window adds → dict-column adds → ReLU → output dot" into a single pass that keeps an H-chunk of the accumulator in SIMD registers throughout, replacing the ~2w+3 full-width accumulator round-trips per boundary with one register-resident sweep. NNUE-style incremental updates across boundaries are structurally ruled out — the same character maps to a different W1 column when its window position j changes — so the 2w window contributions themselves are still computed; only the memory traffic carrying them is cut. Int16 saturating adds are order-dependent, so the fused kernel adds blocks in the same order as the old implementation (window position, then dict columns), verified bit-identical via the existing Int16-vs-Int32 decision-flip test (accuracy/decisions unchanged). Single-thread speed improved roughly 1.4-1.5x (GSD train: 3.5M → 5.11M chars/sec).
 
 ### 4.9 Training-Side Design (Self-Implemented in C++)
 
@@ -529,6 +518,14 @@ public:
     static std::expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
     static std::expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
 
+    // Move-only: a Segmenter owns its model outright, so an implicit copy
+    // would silently duplicate all of it (~400MB for the distributed KyTea
+    // model). Share one with `const Segmenter&`.
+    Segmenter(const Segmenter&) = delete;
+    Segmenter& operator=(const Segmenter&) = delete;
+    Segmenter(Segmenter&&) = default;
+    Segmenter& operator=(Segmenter&&) = default;
+
     std::expected<Segments, Error> tokenize(std::string_view text) const;
 
     std::vector<std::expected<Segments, Error>> tokenize_all(
@@ -536,8 +533,9 @@ public:
 };
 ```
 
-- A single `tokenize()` covering segmentation only. `tokenize_all()` tokenizes many inputs in parallel (`threads == 0` uses hardware concurrency; Section 9: 41 M chars/sec at 8 threads on M1 Pro, 5.6x single-thread).
+- A single `tokenize()` covering segmentation only. `tokenize_all()` tokenizes many inputs in parallel (`threads == 0` uses hardware concurrency; Section 9: 44.98 M chars/sec at 8 threads on M1 Pro, 7.96x single-thread).
 - An empty-string input is treated as "not an error, but an empty result" (`Segments{}`). `Error` is used only for actual abnormal cases such as invalid UTF-8 or an unloaded/unsupported model.
+- A loaded `Segmenter` is immutable and its per-call scratch is `thread_local`, so any number of threads may call `tokenize()` / `tokenize_all()` concurrently on the same `const Segmenter&`. That, not copying, is how one is shared.
 
 ## 7. CLI Interface
 
@@ -557,7 +555,7 @@ As with KyTea / Vaporetto, this follows the **filter-style pattern of reading te
 | Option | Description |
 |---|---|
 | `--model <path>` | path to the model file (required). Auto-detects whether it is KyTea-compatible / custom MLP (Section 2) |
-| `--threads <n>` | number of threads for parallel execution (`0` = `hardware_concurrency()`, default) |
+| `--threads <n>` | number of threads for parallel execution (`0` = `hardware_concurrency()`, default; capped at 1024) |
 
 **Output format**
 
@@ -612,7 +610,8 @@ When a KyTea-compatible model needs training, the real `train-kytea` (Homebrew-d
 ```
 include/segmentlib/
 ├── bytes/
-│   └── binary_reader.h        # (L1) primitive binary-read cursor
+│   ├── binary_reader.h        # (L1) primitive binary-read cursor
+│   └── binary_writer.h        # (L1) the writing counterpart (used by the training exporter)
 ├── unicode/
 │   ├── utf8.h                 # (L1) UTF-8 decode/encode pure functions
 │   ├── egc.h                  # (L1) UAX #29 EGC splitting
@@ -638,7 +637,8 @@ include/segmentlib/
 └── types.h                     # Segments/Error (Section 6.2, no dependencies)
 
 src/
-├── kytea/{char_table,automaton,model,scorer,kytea_backend}.cpp
+├── kytea/{char_table,model,scorer,kytea_backend}.cpp   # automaton.h is header-only
+├── unicode/{utf8,egc,normalize}.cpp
 ├── mlp/{vocab,dictionary,precompute,model,scorer,mlp_backend}.cpp
 ├── mlp/train/                  # training components (built only when SEGMENTLIB_BUILD_TRAINING is on)
 │   ├── corpus.{h,cpp}           # KyTea corpus parser
@@ -710,15 +710,13 @@ cpp-segmentlib/
 │   ├── fetch_ud_pud_corpus.sh
 │   ├── convert_ud_gsd_corpus.py
 │   ├── eval_segmentation.py
+│   ├── extract_dict.py
+│   ├── gen_egc_table.py
 │   └── strip_kytea_tags.py
 ├── docs/
-│   ├── design.ja.md / design.md
-│   ├── mlp_module_design.ja.md / mlp_module_design.md
-│   └── mlp_impl_design.ja.md / mlp_impl_design.md
+│   └── design.ja.md / design.md
 ├── .github/workflows/ci.yml
-├── .gitignore
-├── .clang-format
-└── .clang-tidy
+└── .gitignore
 ```
 
 **Design decisions**
@@ -742,7 +740,7 @@ cpp-segmentlib/
   ctest --test-dir build --output-on-failure
   ```
   Always specify `-DCMAKE_BUILD_TYPE=Release` when benchmarking (a `Debug` build makes inference tens of times slower).
-- **CI**: `.github/workflows/ci.yml`. 4 jobs: macOS arm64 (NEON), Linux x86_64 (AVX2/scalar, GCC 14 + OpenBLAS), Windows (MSVC, AVX2, best-effort). Golden tests auto-skip when the model is absent.
+- **CI**: `.github/workflows/ci.yml`. 6 jobs: macOS arm64 (NEON), Linux x86_64 (AVX2/scalar, GCC 14 + OpenBLAS), Windows (MSVC, AVX2, best-effort), an ASan + UBSan job (the only one built with assertions on), and a golden job that fetches the KyTea model (cached) and sets `SEGMENTLIB_REQUIRE_GOLDEN` so a missing model fails instead of skipping. All jobs build with `-DSEGMENTLIB_WARNINGS_AS_ERRORS=ON`.
 
 ## 9. Benchmarks (Inference Speed)
 

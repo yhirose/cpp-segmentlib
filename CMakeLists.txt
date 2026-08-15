@@ -39,7 +39,7 @@ else()
 endif()
 # Training is a development tool, physically separated from inference: the
 # segmentlib_train target is opt-in and is the only place BLAS is linked
-# (design.ja.md 5.9, mlp_module_design.ja.md 0/5節).
+# (design.ja.md 4.9).
 option(SEGMENTLIB_BUILD_TRAINING "Build the MLP training components (segmentlib_train)" OFF)
 
 add_subdirectory(src)

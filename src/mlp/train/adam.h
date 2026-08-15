@@ -5,7 +5,7 @@
 
 #include "mlp/train/net.h"
 
-// Adam (design.ja.md 5.9, mlp_impl_design.ja.md II.4): standard moments for
+// Adam (design.ja.md 4.9): standard moments for
 // the dense tensors, lazy per-row moments for the sparse embedding gradient
 // (only rows that appear in a batch update, each with its own step count for
 // bias correction).
