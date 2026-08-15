@@ -17,6 +17,7 @@ using bytes::ParseError;
 
 std::vector<std::int16_t> read_i16_tensor(bytes::BinaryReader& in,
                                           std::size_t count) {
+    in.require_capacity(count, sizeof(std::int16_t));
     std::vector<std::int16_t> tensor(count);
     for (std::int16_t& v : tensor) {
         v = in.read<std::int16_t>();
@@ -72,6 +73,7 @@ Model::Parts Model::parse(bytes::BinaryReader& in, TablePrecision precision) {
     if (vocab_size < 2) {
         throw ParseError("vocabulary smaller than the reserved rows");
     }
+    in.require_capacity(vocab_size - 2, sizeof(std::uint32_t));
     std::vector<char32_t> codepoints(vocab_size - 2);
     char32_t prev = 0;
     for (std::size_t i = 0; i < codepoints.size(); ++i) {
@@ -95,6 +97,7 @@ Model::Parts Model::parse(bytes::BinaryReader& in, TablePrecision precision) {
     const std::vector<std::int16_t> wdict =
         c.num_dicts > 0 ? read_i16_tensor(in, h * fd)
                         : std::vector<std::int16_t>{};
+    in.require_capacity(h, sizeof(double));
     std::vector<double> b1(h);
     for (double& b : b1) {
         b = in.read<double>();
@@ -106,6 +109,7 @@ Model::Parts Model::parse(bytes::BinaryReader& in, TablePrecision precision) {
     std::vector<std::vector<std::string>> dictionaries(c.num_dicts);
     for (auto& dict : dictionaries) {
         const std::uint32_t entries = in.read<std::uint32_t>();
+        in.require_capacity(entries, 1);  // each is at least a NUL terminator
         dict.reserve(entries);
         for (std::uint32_t e = 0; e < entries; ++e) {
             dict.push_back(in.read_cstring());

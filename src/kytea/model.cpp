@@ -29,6 +29,7 @@ void discard_bool(BinaryReader& r) {
 
 FeatVec read_featvec(BinaryReader& r) {
     const auto n = r.read<std::uint32_t>();
+    r.require_capacity(n, sizeof(FeatVal));
     FeatVec v(n);
     for (auto& x : v) {
         x = r.read<FeatVal>();

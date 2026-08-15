@@ -51,6 +51,15 @@ public:
     // one entry. A dictionary written as "absent" (zero states) yields an empty
     // automaton, and — matching KyTea's on-disk form — no entry count follows,
     // so nothing further is consumed.
+    //
+    // Every state id, goto target and output index is checked against the counts
+    // the file itself declares before it is used. build_canonical indexes
+    // `new_id` and `payloads_` with these values directly, so an unchecked one
+    // is an out-of-bounds write at an attacker-chosen offset, not a wrong
+    // answer; the checks below are what makes a malformed model a rejected
+    // model. One structural check cannot be made here — that every state is
+    // reachable from the root — and lives in build_canonical, whose DFS
+    // already establishes reachability as a side effect.
     template <class ReadPayload>
     static Automaton read(bytes::BinaryReader& r, ReadPayload read_payload) {
         Automaton a;
@@ -59,24 +68,55 @@ public:
         if (n_states == 0) {
             return a;  // absent dictionary: no entries follow
         }
+        // Each state is at least failure + n_gotos + n_out + is_branch on disk.
+        r.require_capacity(n_states, 4 + 4 + 4 + 1);
         std::vector<TempState> temp(n_states);
+        // Bound on the output indices seen so far (largest + 1, 0 if none).
+        // Outputs index payloads_, whose count is only known after every state
+        // has been read, but carrying the bound along costs one compare per
+        // output against a register, where a second pass would re-walk all
+        // ~2M states' output vectors.
+        std::uint64_t out_bound = 0;
         for (auto& s : temp) {
             s.failure = r.read<std::uint32_t>();
+            if (s.failure >= n_states) {
+                throw bytes::ParseError("automaton failure link out of range");
+            }
             const auto n_gotos = r.read<std::uint32_t>();
+            r.require_capacity(n_gotos, sizeof(CharId) + 4);  // CharId + target
             s.gotos.reserve(n_gotos);
             for (std::uint32_t i = 0; i < n_gotos; ++i) {
                 const auto c = r.read<CharId>();
                 const auto next = r.read<std::uint32_t>();
+                if (next >= n_states) {
+                    throw bytes::ParseError("automaton goto target out of range");
+                }
+                // build_canonical takes each state's first goto as its smallest
+                // CharId (to derive the base) and the root's last as its
+                // largest (to size root_next_), so strict ascent is a layout
+                // requirement, not just a convention. It also rules out
+                // duplicate keys, which would alias two states onto one slot.
+                if (!s.gotos.empty() && c <= s.gotos.back().first) {
+                    throw bytes::ParseError("automaton goto keys not strictly ascending");
+                }
                 s.gotos.emplace_back(c, next);
             }
             const auto n_out = r.read<std::uint32_t>();
+            r.require_capacity(n_out, 4);  // one payload index each
             s.outputs.resize(n_out);
             for (auto& o : s.outputs) {
                 o = r.read<std::uint32_t>();
+                out_bound = std::max(out_bound, std::uint64_t{o} + 1);
             }
             s.is_branch = r.read_bool();  // marks a genuine word-end (see find_entry)
         }
         const auto n_entries = r.read<std::uint32_t>();
+        if (out_bound > n_entries) {
+            throw bytes::ParseError("automaton output index out of range");
+        }
+        // A payload's size is up to read_payload, but every form this parser
+        // uses is length-prefixed, so one costs at least the 4-byte prefix.
+        r.require_capacity(n_entries, 4);
         a.payloads_.reserve(n_entries);
         for (std::uint32_t i = 0; i < n_entries; ++i) {
             a.payloads_.push_back(read_payload(r));
@@ -342,6 +382,17 @@ private:
                 stack.push_back(child_old);
             }
             enforce_cap();
+        }
+
+        // Every state must have been reached by the DFS above, or its new id is
+        // still kNull and the remap below would index fail_/out_offset_ at
+        // 2^32-1. A well-formed Aho-Corasick automaton is fully reachable from
+        // the root by goto edges, so an unreachable state means a malformed
+        // file, not a shape this build can represent.
+        for (const auto id : new_id) {
+            if (id == kNull) {
+                throw bytes::ParseError("automaton has a state unreachable from the root");
+            }
         }
 
         // Remap failure links and outputs into the canonical id space, indexed

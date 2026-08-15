@@ -86,6 +86,27 @@ public:
         pos_ += n;
     }
 
+    // Rejects an element count that the bytes left in the buffer cannot
+    // possibly back, given that each element occupies at least
+    // `min_bytes_each` bytes on disk.
+    //
+    // read() bounds-checks every read, so a bogus count can never cause an
+    // out-of-bounds read — but the container is sized from the count *before*
+    // the first element is read, so the check fires only after the allocation.
+    // A 60-byte file declaring 2^32-1 vocabulary entries reserved 1.8 GB and
+    // spun for 2.5s before reporting the error. Calling this first turns that
+    // into an immediate rejection, which is why it is a precondition of every
+    // count-driven reserve/resize in the parsers rather than an optional
+    // hardening step.
+    void require_capacity(std::uint64_t count, std::size_t min_bytes_each) const {
+        if (min_bytes_each == 0) {
+            return;
+        }
+        if (count > remaining() / min_bytes_each) {
+            throw ParseError("declared element count exceeds the remaining bytes");
+        }
+    }
+
 private:
     template <class T>
     [[nodiscard]] T read_raw() {

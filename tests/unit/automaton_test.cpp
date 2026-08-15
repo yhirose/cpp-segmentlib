@@ -281,3 +281,105 @@ TEST_CASE("absent dictionary parses to empty automaton") {
     std::vector<CharId> text{1, 2, 3};
     CHECK(a.match_all(text).empty());
 }
+
+// Malformed-input rejection. Each case below is a two-state automaton that is
+// well-formed except for one field; before these were validated, build_canonical
+// indexed new_id/payloads_ with the bad value and wrote out of bounds at an
+// offset the file chooses (confirmed under ASan: wild writes in the child
+// placement and the failure-link remap, and a heap-buffer-overflow when sizing
+// root_next_). They must parse to a ParseError instead.
+namespace {
+
+// root --c=2--> state 1, one payload, one output on state 1. The defaults are
+// well-formed; each SUBCASE below corrupts exactly one member.
+struct Fixture {
+    std::uint32_t root_failure = 0;
+    std::uint32_t leaf_output = 0;
+    std::vector<std::pair<CharId, std::uint32_t>> root_gotos{{2, 1}};
+    // States written after state 1 and counted in the header, but named by no
+    // goto, i.e. unreachable from the root.
+    std::uint32_t extra_states = 0;
+};
+
+std::vector<std::byte> build_fixture(const Fixture& c) {
+    Writer w;
+    w.put_u8(1);
+    w.put<std::uint32_t>(2 + c.extra_states);
+
+    // state 0 (root)
+    w.put<std::uint32_t>(c.root_failure);
+    w.put<std::uint32_t>(static_cast<std::uint32_t>(c.root_gotos.size()));
+    for (const auto& [ch, next] : c.root_gotos) {
+        w.put<std::uint16_t>(ch);
+        w.put<std::uint32_t>(next);
+    }
+    w.put<std::uint32_t>(0);  // 0 outputs
+    w.put_u8(0);
+
+    // state 1 (leaf)
+    w.put<std::uint32_t>(0);  // failure -> root
+    w.put<std::uint32_t>(0);  // 0 gotos
+    w.put<std::uint32_t>(1);  // 1 output
+    w.put<std::uint32_t>(c.leaf_output);
+    w.put_u8(1);
+
+    for (std::uint32_t i = 0; i < c.extra_states; ++i) {
+        w.put<std::uint32_t>(0);  // failure -> root
+        w.put<std::uint32_t>(0);  // 0 gotos
+        w.put<std::uint32_t>(0);  // 0 outputs
+        w.put_u8(0);
+    }
+
+    w.put<std::uint32_t>(1);    // 1 payload
+    w.put<std::uint32_t>(700);
+    return std::move(w.bytes);
+}
+
+}  // namespace
+
+TEST_CASE("the uncorrupted rejection fixture is itself well-formed") {
+    auto a = parse(build_fixture(Fixture{}));
+    const std::vector<CharId> text{2};
+    REQUIRE(a.find_entry(text) != nullptr);
+    CHECK(*a.find_entry(text) == 700);
+}
+
+TEST_CASE("malformed automata are rejected, not built") {
+    SUBCASE("failure link beyond the state count") {
+        Fixture c;
+        c.root_failure = 0xDEADBEEF;
+        CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
+    }
+    SUBCASE("goto target beyond the state count") {
+        Fixture c;
+        c.root_gotos = {{2, 999999}};
+        CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
+    }
+    SUBCASE("output index beyond the payload count") {
+        Fixture c;
+        c.leaf_output = 42;  // only 1 payload follows
+        CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
+    }
+    SUBCASE("root gotos not strictly ascending") {
+        // build_canonical takes gotos.front() as the smallest CharId and, for
+        // the root, gotos.back() as the largest, so descending keys size
+        // root_next_ too small and write past it.
+        Fixture c;
+        c.root_gotos = {{9, 1}, {2, 1}};
+        CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
+    }
+    SUBCASE("duplicate goto keys") {
+        // Two children aliased onto one slot; caught by the same strict-ascent
+        // rule.
+        Fixture c;
+        c.root_gotos = {{2, 1}, {2, 1}};
+        CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
+    }
+    SUBCASE("state unreachable from the root") {
+        // State 2 is declared and written but named by no goto, so it keeps
+        // new_id == kNull and the remap would index fail_ at 2^32-1.
+        Fixture c;
+        c.extra_states = 1;
+        CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
+    }
+}

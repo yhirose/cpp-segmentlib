@@ -77,3 +77,25 @@ TEST_CASE("skip advances the cursor") {
     CHECK(r.read<std::uint8_t>() == 42u);
     CHECK_THROWS_AS(r.skip(100), ParseError);
 }
+
+TEST_CASE("require_capacity rejects counts the buffer cannot back") {
+    std::array<unsigned char, 8> buf{};
+    BinaryReader r(bytes_of(buf));
+
+    CHECK_NOTHROW(r.require_capacity(4, 2));  // exactly fits
+    CHECK_NOTHROW(r.require_capacity(0, 4));
+    CHECK_THROWS_AS(r.require_capacity(5, 2), ParseError);
+
+    // The point of the check: a huge count must be rejected before it is used
+    // to size a container, not after the first read runs off the end.
+    CHECK_THROWS_AS(r.require_capacity(0xFFFFFFFFu, 4), ParseError);
+    // count * min_bytes_each must not wrap; the division form avoids it.
+    CHECK_THROWS_AS(r.require_capacity(0xFFFFFFFFFFFFFFFFull, 8), ParseError);
+
+    // A zero element size carries no information, so it cannot reject.
+    CHECK_NOTHROW(r.require_capacity(0xFFFFFFFFu, 0));
+
+    r.skip(8);  // exhausted: only a zero count is still satisfiable
+    CHECK_NOTHROW(r.require_capacity(0, 1));
+    CHECK_THROWS_AS(r.require_capacity(1, 1), ParseError);
+}
