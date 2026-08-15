@@ -369,11 +369,13 @@ Comparisons retrain KyTea and Vaporetto on an obtainable corpus (UD_Japanese-GSD
 
 | Test set (genre) | Boundaries | KyTea F1 | Vaporetto F1 | MLP F1 | MLP gap (vs KyTea) |
 |---|---|---|---|---|---|
-| GSD test (Wikipedia, in-domain) | 12,491 | 98.87% | 98.79% | 97.91% | −0.96pt |
-| PUD (news/Wikipedia parallel, out-of-domain) | 27,788 | 99.24% | 99.17% | 98.56% | −0.68pt |
-| GSD+PUD combined (2 genres) | 40,279 | 99.13% | 99.05% | 98.35% | −0.78pt |
+| GSD test (Wikipedia, in-domain) | 12,491 | 98.87% | 98.79% | 98.00% | −0.87pt |
+| PUD (news/Wikipedia parallel, out-of-domain) | 27,788 | 99.24% | 99.17% | 98.57% | −0.67pt |
+| GSD+PUD combined (2 genres) | 40,279 | 99.13% | 99.05% | 98.39% | −0.74pt |
 
-No dictionary, default configuration (w=5, d=64, H=256, seed=42). Zero quantization-induced decision flips across dev+train, 290,024 boundaries, on the real UD-GSD model. Seed-induced F1 variation is about ±0.05pt (measured over 5 seeds). **Without a dictionary the MLP trails the linear models (KyTea/Vaporetto) by ~0.7–1.0pt**; KyTea and Vaporetto are roughly tied.
+No dictionary, default configuration (w=5, d=64, H=256, patience=15, seed=42). Zero quantization-induced decision flips across dev+train, 290,024 boundaries, on the real UD-GSD model. Seed-induced F1 variation is about ±0.05pt (measured over 5 seeds). **Without a dictionary the MLP trails the linear models (KyTea/Vaporetto) by ~0.7–0.9pt**; KyTea and Vaporetto are roughly tied.
+
+Two levers were evaluated against this configuration and settled (both measured over 5 seeds). **Early-stopping patience was raised from 5 to 15 and adopted**: dev F1 keeps creeping up across plateaus a dozen epochs long, so patience 5 stopped on a plateau and cost 0.11pt of GSD test F1, while patience 15 costs only training wall-clock (about 22s → 60s) and nothing at inference. **A larger network (d=96, H=512) was rejected**: +0.23pt GSD / +0.10pt PUD for 45% of the inference speed (5.1 → 2.8 M chars/sec), a 627KB → 1511KB model and a 130ms → 467ms load. That is the same speed cost as the dictionary features rejected earlier (−48% for +0.45pt GSD), for half the accuracy and twelve times the model growth.
 
 **Speed** (M1 Pro, `bench/bench_segment`, int16+NEON, best-of-8):
 
@@ -578,7 +580,7 @@ segmenter train --backend mlp \
   --dict dict.txt \
   --model-out model.bin \
   [--char-window 5] [--embed-dim 64] [--hidden 256] [--min-count 2] \
-  [--epochs 30] [--batch-size 256] [--patience 5] [--lr 1e-3] [--seed 42]
+  [--epochs 100] [--batch-size 256] [--patience 15] [--lr 1e-3] [--seed 42]
 ```
 
 Only `--backend mlp` is implemented (requires a `SEGMENTLIB_BUILD_TRAINING=ON` build; `train` is a stub in an OFF build). `--backend kytea` / `--backend vaporetto` return an explicit "not implemented" error (`train_command.cpp`).
@@ -595,9 +597,9 @@ Only `--backend mlp` is implemented (requires a `SEGMENTLIB_BUILD_TRAINING=ON` b
 | `--embed-dim <int>` | embedding dimension (default 64) |
 | `--hidden <int>` | hidden-layer width (default 256) |
 | `--min-count <int>` | codepoint vocabulary frequency threshold (default 2) |
-| `--epochs <int>` | number of epochs (default 30) |
+| `--epochs <int>` | number of epochs (default 100) |
 | `--batch-size <int>` | batch size (default 256) |
-| `--patience <int>` | early-stopping patience (default 5) |
+| `--patience <int>` | early-stopping patience (default 15) |
 | `--lr <float>` | learning rate (default 1e-3) |
 | `--seed <int>` | random seed (default 42) |
 

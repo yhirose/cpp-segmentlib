@@ -55,9 +55,9 @@ struct Options {
     std::uint32_t embed_dim = 64;
     std::uint32_t hidden = 256;
     std::uint32_t min_count = 2;
-    std::uint32_t epochs = 30;
+    std::uint32_t epochs = 100;
     std::uint32_t batch_size = 256;
-    std::uint32_t patience = 5;
+    std::uint32_t patience = 15;
     float lr = 1e-3f;
     std::uint64_t seed = 42;
 

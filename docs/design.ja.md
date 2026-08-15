@@ -369,11 +369,13 @@ SegmentLibMLP <version>\n
 
 | テストセット（ジャンル） | 境界数 | KyTea F1 | Vaporetto F1 | MLP F1 | MLP差(vs KyTea) |
 |---|---|---|---|---|---|
-| GSD test（Wikipedia、in-domain） | 12,491 | 98.87% | 98.79% | 97.91% | −0.96pt |
-| PUD（news/Wikipedia対訳、out-of-domain） | 27,788 | 99.24% | 99.17% | 98.56% | −0.68pt |
-| GSD+PUD合算（2ジャンル） | 40,279 | 99.13% | 99.05% | 98.35% | −0.78pt |
+| GSD test（Wikipedia、in-domain） | 12,491 | 98.87% | 98.79% | 98.00% | −0.87pt |
+| PUD（news/Wikipedia対訳、out-of-domain） | 27,788 | 99.24% | 99.17% | 98.57% | −0.67pt |
+| GSD+PUD合算（2ジャンル） | 40,279 | 99.13% | 99.05% | 98.39% | −0.74pt |
 
-辞書なし・既定構成（w=5, d=64, H=256, seed=42）での結果。量子化による判定反転はUD-GSD実モデルでdev+train 290,024境界中0件。seed起因のF1変動は±0.05pt程度（5 seedで実測）。**辞書なしでは本MLPは線形モデル（KyTea/Vaporetto）に約0.7〜1.0pt負ける**。KyTeaとVaporettoはほぼ互角。
+辞書なし・既定構成（w=5, d=64, H=256, patience=15, seed=42）での結果。量子化による判定反転はUD-GSD実モデルでdev+train 290,024境界中0件。seed起因のF1変動は±0.05pt程度（5 seedで実測）。**辞書なしでは本MLPは線形モデル（KyTea/Vaporetto）に約0.7〜0.9pt負ける**。KyTeaとVaporettoはほぼ互角。
+
+この構成に対して2つの手を評価し、決着させた（いずれも5 seedで実測）。**早期終了のpatienceは5→15に引き上げて採用**：dev F1は十数エポック規模の踊り場を挟みながら伸び続けるため、patience 5は踊り場で打ち切ってGSD test F1を0.11pt失っていた。patience 15のコストは学習時間だけ（約22秒→60秒）で、推論側には何も乗らない。**ネットワークの容量増（d=96, H=512）は不採用**：GSD +0.23pt / PUD +0.10ptと引き換えに推論速度が45%減（5.1→2.8 M chars/sec）、モデルは627KB→1511KB、ロードは130ms→467ms。これは以前に不採用とした辞書素性（−48%でGSD +0.45pt）と同じ速度コストで、精度の伸びは半分、モデルの肥大は12倍にあたる。
 
 **速度**（M1 Pro、`bench/bench_segment`、int16+NEON、best-of-8）：
 
@@ -578,7 +580,7 @@ segmenter train --backend mlp \
   --dict dict.txt \
   --model-out model.bin \
   [--char-window 5] [--embed-dim 64] [--hidden 256] [--min-count 2] \
-  [--epochs 30] [--batch-size 256] [--patience 5] [--lr 1e-3] [--seed 42]
+  [--epochs 100] [--batch-size 256] [--patience 15] [--lr 1e-3] [--seed 42]
 ```
 
 `--backend mlp`のみ実装されている（`SEGMENTLIB_BUILD_TRAINING=ON`ビルドが必要。OFFビルドでは`train`はスタブ）。`--backend kytea`／`--backend vaporetto`は明示的な「not implemented」エラーを返す（`train_command.cpp`）。
@@ -595,9 +597,9 @@ segmenter train --backend mlp \
 | `--embed-dim <int>` | 埋め込み次元（既定64） |
 | `--hidden <int>` | 隠れ層幅（既定256） |
 | `--min-count <int>` | コードポイント語彙の頻度閾値（既定2） |
-| `--epochs <int>` | エポック数（既定30） |
+| `--epochs <int>` | エポック数（既定100） |
 | `--batch-size <int>` | バッチサイズ（既定256） |
-| `--patience <int>` | 早期終了の忍耐値（既定5） |
+| `--patience <int>` | 早期終了の忍耐値（既定15） |
 | `--lr <float>` | 学習率（既定1e-3） |
 | `--seed <int>` | 乱数シード（既定42） |
 
