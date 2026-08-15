@@ -131,6 +131,27 @@ jobs:
         env:
           SEGMENTLIB_REQUIRE_GOLDEN: '1'
 
+  # Every other job builds segmentlib as the top-level project, so nothing here
+  # exercises the path a downstream user takes. Both consumer-side defects found
+  # so far — an include path that resolved into the consumer's own tree, and our
+  # test/bench/CLI targets landing in the consumer's `all` — were found by
+  # reading CMake files while every job stayed green. This job builds
+  # tests/consumer/ against the working tree and checks that a consumer gets the
+  # library and nothing else.
+  consumer:
+    name: Consumer integration (add_subdirectory)
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y g++-14
+      - name: Check
+        run: scripts/check_consumer.sh
+        env:
+          CXX: g++-14
+
   # Windows is best-effort (design.ja.md 5.9): MSVC's C++23 coverage is
   # believed sufficient but has never been exercised, so this job reports
   # without blocking the workflow. Training stays off (no easy BLAS); the

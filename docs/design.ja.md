@@ -694,11 +694,13 @@ cpp-segmentlib/
 ├── tests/
 │   ├── CMakeLists.txt
 │   ├── unit/                     # モジュール単位のテスト
-│   └── golden/                   # KyTea実バイナリの実出力と突き合わせるテスト
-│       ├── golden_test.cpp
-│       └── fixtures/
-│           ├── input.txt
-│           └── expected.txt      # `kytea -notags`の出力
+│   ├── golden/                   # KyTea実バイナリの実出力と突き合わせるテスト
+│   │   ├── golden_test.cpp
+│   │   └── fixtures/
+│   │       ├── input.txt
+│   │       └── expected.txt      # `kytea -notags`の出力
+│   └── consumer/                 # 利用側プロジェクトの模擬。check_consumer.shが
+│                                 # ビルドする。本体ビルドには含まれない
 ├── models/                       # (gitignore) KyTea/Vaporettoモデル
 ├── corpus/                       # (gitignore) 評価用コーパス
 ├── bench/                        # 推論ベンチ（9節）
@@ -713,6 +715,7 @@ cpp-segmentlib/
 │   ├── convert_ud_gsd_corpus.py
 │   ├── eval_segmentation.py
 │   ├── extract_dict.py
+│   ├── check_consumer.sh
 │   ├── gen_egc_table.py
 │   └── strip_kytea_tags.py
 ├── docs/
@@ -743,7 +746,7 @@ cpp-segmentlib/
   ```
   ベンチマーク計測時は必ず`-DCMAKE_BUILD_TYPE=Release`を指定する（`Debug`構成では推論速度が数十倍遅くなる）。
 - **他プロジェクトからの利用**：`add_subdirectory()`または`FetchContent`で取り込み、`segmentlib`ターゲットにリンクする（公開includeパスは自動で伝播）。開発用ターゲット——テストスイート（doctestをネットワーク取得する）・ベンチマーク・`segmenter` CLI——は、単体ビルド時はON、**segmentlibが最上位プロジェクトでないときはOFF**が既定なので、利用側の`all`でビルドされるのは静的ライブラリ1つだけ。`CMAKE_BUILD_TYPE`の`Release`既定も同様に単体ビルド時のみ（`FetchContent`配下ではキャッシュは利用側のものだから）。install/exportセットは持たないため`find_package(segmentlib)`は非対応。
-- **CI**：`.github/workflows/ci.yml`。macOS arm64（NEON）・Linux x86_64（AVX2/scalar、GCC14+OpenBLAS）・Windows（MSVC、AVX2、best-effort）に加え、ASan+UBSanジョブ（assertion有効なのはこれだけ）と、KyTeaモデルを取得（キャッシュ付き）して`SEGMENTLIB_REQUIRE_GOLDEN`を立てるgoldenジョブの計6ジョブ。この環境変数によりモデル未取得はスキップではなく失敗になる。全ジョブ`-DSEGMENTLIB_WARNINGS_AS_ERRORS=ON`でビルド。
+- **CI**：`.github/workflows/ci.yml`。macOS arm64（NEON）・Linux x86_64（AVX2/scalar、GCC14+OpenBLAS）・Windows（MSVC、AVX2、best-effort）に加え、ASan+UBSanジョブ（assertion有効なのはこれだけ）、KyTeaモデルを取得（キャッシュ付き）して`SEGMENTLIB_REQUIRE_GOLDEN`を立てるgoldenジョブ（この環境変数によりモデル未取得はスキップではなく失敗になる）、そして`tests/consumer/`を作業ツリーに対してビルドし「利用側のビルドに入るのはライブラリだけ（テスト/ベンチ/CLIの成果物なし・doctest取得なし・ビルド種別を勝手に決めない）」を検査するconsumerジョブ（`scripts/check_consumer.sh`）の計7ジョブ。全ジョブ`-DSEGMENTLIB_WARNINGS_AS_ERRORS=ON`でビルド。
 
 ## 9. ベンチマーク（推論速度）
 
