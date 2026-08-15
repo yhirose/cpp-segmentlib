@@ -16,6 +16,66 @@ Detailed design document (English / Japanese):
 
 - Overall design: [docs/design.md](docs/design.md) / [docs/design.ja.md](docs/design.ja.md)
 
+## Getting started
+
+No model is distributed with the library, so the first step is to build one.
+The whole path below takes about a minute of compute plus a 140MB download, on
+a checkout with CMake 3.24+, a C++23 compiler and Python 3.
+
+### Build
+
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release -DSEGMENTLIB_BUILD_TRAINING=ON
+cmake --build build --parallel
+```
+
+`SEGMENTLIB_BUILD_TRAINING=ON` is what adds the trainer, and it is the only
+part that needs BLAS (Accelerate on macOS, OpenBLAS elsewhere; override with
+`-DSEGMENTLIB_BLAS=`). Leave it off to build inference alone, which needs
+nothing beyond the standard library. The `segmenter` CLI lands in
+`build/src/cli/segmenter`.
+
+### Train the reference model
+
+```sh
+scripts/fetch_ud_gsd_corpus.sh    # UD_Japanese-GSD, converted to KyTea format
+scripts/fetch_unidic_dict.sh      # UniDic 2.1.2, converted to a word list
+
+build/src/cli/segmenter train --backend mlp \
+    --corpus corpus/ud-gsd/train.kytea.txt \
+    --dev-corpus corpus/ud-gsd/dev.kytea.txt \
+    --dict corpus/ud-gsd/dict_unidic.txt \
+    --model-out corpus/ud-gsd/mlp.mod
+```
+
+That is 99.1% boundary F1 on GSD test and 99.3% on UD_Japanese-PUD, in a 2.1MB
+model (Section 4.8 of the design document has the comparison against KyTea and
+Vaporetto, and against other dictionaries). Training takes about 40 seconds and
+stops itself when the dev score stops improving.
+
+The dictionary is optional. Dropping `--dict` gives a 0.6MB model that loads
+and runs faster but scores about a point lower, and carries no third-party
+licence (see below). `scripts/extract_dict.py` is a middle option: it builds a
+dictionary out of the training corpus itself, needing no external data.
+
+### Segment text
+
+`predict` reads UTF-8 text on stdin, one sentence per line, and writes
+space-separated words:
+
+```sh
+$ echo '日本語の文を分割します。' | build/src/cli/segmenter predict --model corpus/ud-gsd/mlp.mod
+日本 語 の 文 を 分割 し ます 。
+```
+
+The backend is chosen from the file itself, so the same command runs a KyTea
+model (`scripts/fetch_kytea_model.sh` fetches one) with no other change. Words
+containing a space, `/`, `&` or `\` are escaped with a backslash, as KyTea
+does. `--threads N` segments the input in parallel.
+
+In C++ the equivalent is `Segmenter::load(path)` followed by `tokenize(text)`;
+see Section 6 of the design document.
+
 ## License
 
 MIT License. See [LICENSE](LICENSE).
