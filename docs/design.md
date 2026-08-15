@@ -363,17 +363,26 @@ Example: `SegmentLibMLP 1\n`. This `"SegmentLibMLP "` signature is used for back
 
 ### 4.8 Evaluation Results (Current Measured Values)
 
-Comparisons retrain KyTea on an obtainable corpus (UD_Japanese-GSD, CC BY-SA 4.0) and compare it against the MLP backend trained on the identical data and dictionary, since the distributed model's training corpus is unobtainable.
+Comparisons retrain KyTea and Vaporetto on an obtainable corpus (UD_Japanese-GSD, CC BY-SA 4.0) and compare them against the MLP backend trained on the **identical data with no dictionary**, since the distributed model's training corpus is unobtainable. All three were trained on `corpus/ud-gsd/train.kytea.txt` with no dictionary features. The KyTea backend is confirmed byte-identical to the real binary (`kytea -notags`).
 
-**Accuracy** (`scripts/eval_segmentation.py`, boundary F-score):
+**Accuracy** (`scripts/eval_segmentation.py`, boundary F-score; all three measured under one identical eval/gold):
 
-| Test set (genre) | Boundaries | KyTea F1 | MLP F1 | Gap |
-|---|---|---|---|---|
-| GSD test (Wikipedia, in-domain) | 12,491 | 98.65% | 97.91% | 0.74pt |
-| PUD (news/Wikipedia parallel, out-of-domain) | 27,788 | 99.18% | 98.56% | 0.62pt |
-| GSD+PUD combined (2 genres) | 40,279 | 99.02% | 98.35% | 0.67pt |
+| Test set (genre) | Boundaries | KyTea F1 | Vaporetto F1 | MLP F1 | MLP gap (vs KyTea) |
+|---|---|---|---|---|---|
+| GSD test (Wikipedia, in-domain) | 12,491 | 98.87% | 98.79% | 97.91% | −0.96pt |
+| PUD (news/Wikipedia parallel, out-of-domain) | 27,788 | 99.24% | 99.17% | 98.56% | −0.68pt |
+| GSD+PUD combined (2 genres) | 40,279 | 99.13% | 99.05% | 98.35% | −0.78pt |
 
-No dictionary, default configuration (w=5, d=64, H=256). Zero quantization-induced decision flips across dev+train, 290,024 boundaries, on the real UD-GSD model.
+No dictionary, default configuration (w=5, d=64, H=256, seed=42). Zero quantization-induced decision flips across dev+train, 290,024 boundaries, on the real UD-GSD model. Seed-induced F1 variation is about ±0.05pt (measured over 5 seeds). **Without a dictionary the MLP trails the linear models (KyTea/Vaporetto) by ~0.7–1.0pt**; KyTea and Vaporetto are roughly tied.
+
+**Analysis of why the MLP trails the linear models without a dictionary** (per-boundary comparison; the gap is significant by McNemar's test: MLP-only errors 327 vs KyTea-only 85 (GSD, z=11.9), 542 vs 158 (PUD, z=14.5)):
+
+- **The main cause is "seen but locally ambiguous bigrams" — insufficient lexical memorization capacity.** The share of boundaries whose straddling bigram occurs *both joined and split* in the training data is 17.1% (GSD) / 15.5% (PUD) over all boundaries, but **27.5% / 28.4%** among MLP-only errors. Such boundaries cannot be decided locally; they require memorizing the exact lexical pattern (the full n-gram of ですね, とんでもない, …). KyTea/Vaporetto's sparse explicit n-gram features (~890K features on GSD) act as a de-facto memorization table, whereas this MLP's parameters (~150K embedding + ~160K W1) have far less capacity for lexical exceptions.
+- **Conversely, on training-unseen bigrams the MLP is relatively stronger** — evidence the compositional embedding generalizes as intended. Among KyTea-only errors, **42.4% / 42.4%** of boundary bigrams are unseen in training, versus 30.3% / 30.1% for MLP-only errors: a linear model is more brittle where its exact n-gram features never fire. The MLP loses on the memorization side, not the generalization side.
+- **The rare-character skew is real but secondary.** Among MLP-only errors, the median training frequency of the rarer straddling character is 131/150 vs 327/362 over all boundaries, and the near-OOV share (<2 training occurrences) is 2.8%/7.4% vs 0.5%/1.0% — 5–7× over-represented. A 64-dim embedding is unstable at low frequency. Out-of-domain (PUD) adds a spike of katakana-run errors from failing to split OOV loanwords/proper nouns.
+- **Implications.** Since memorization is the bottleneck: (1) **dictionary features** (even a word list extracted from the training corpus) are the most direct fix — they inject lexical knowledge at every boundary; (2) larger embedding/hidden dims add memorization capacity at a speed cost; (3) character type as a per-slot input (the Section 4.1 leftover) may help the rare-character/OOV side. Note that **splitting the OOV UNK row by General Category was tried and had no effect** (multi-seed A/B, Δ=0.00pt) — the rare-*character* problem is not solved at character-type granularity, and the real deficit is lexical memory.
+
+Dictionary features (a self-extracted training-corpus dictionary, `scripts/extract_dict.py`) were also evaluated but rejected: the accuracy gain (GSD +0.45pt) came with too large a speed cost (5.11→2.67 M chars/sec, about −48%).
 
 **Speed** (M1 Pro, `bench/bench_segment`, int16+NEON, best-of-8):
 
