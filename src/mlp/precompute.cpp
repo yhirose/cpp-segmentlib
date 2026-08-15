@@ -18,11 +18,17 @@ namespace segmentlib::mlp {
 template <class Emit>
 void PrecomputeTable::synthesize(std::span<const std::uint32_t> rows,
                                  std::size_t j, Emit emit) const {
-    std::int32_t sum_c[256];  // the loader rejects embed_dim > 256
+    // int64, not int32: `rows` is one EGC's constituent codepoints, and an EGC
+    // is caller-controlled — a long run of combining marks is a single cluster
+    // of unbounded length. At int32 a ~400 KB line of them overflowed the
+    // accumulator (UB), so the width is a correctness requirement, not
+    // headroom. Values that fit in int32 accumulate identically here, so the
+    // bit-exactness contract with the trainer's reference forward is unchanged.
+    std::int64_t sum_c[256];  // the loader rejects embed_dim > 256
     const std::size_t d = d_;
     assert(d <= std::size(sum_c));
     for (std::size_t k = 0; k < d; ++k) {
-        std::int32_t s = 0;
+        std::int64_t s = 0;
         for (const std::uint32_t row : rows) {
             s += emb_q_[static_cast<std::size_t>(row) * d + k];
         }
