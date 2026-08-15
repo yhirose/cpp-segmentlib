@@ -618,8 +618,6 @@ include/segmentlib/
 │   ├── utf8.h                 # (L1) UTF-8 decode/encode pure functions
 │   ├── egc.h                  # (L1) UAX #29 EGC splitting
 │   └── normalize.h            # (L1) KyTea-compatible half-width→full-width normalization
-├── text/
-│   └── aho_corasick.h         # (L2) Aho-Corasick construction + matching (header-only)
 ├── kytea/
 │   ├── char_table.h           # (L2) character-type classification + character intern table
 │   ├── automaton.h            # (L2) Aho-Corasick runtime representation (double-array)
@@ -628,7 +626,7 @@ include/segmentlib/
 │   └── kytea_backend.h        # (L5) backend interface implementation (tokenize)
 ├── mlp/
 │   ├── vocab.h                 # (L2) codepoint vocabulary + EGC encoding
-│   ├── dictionary.h            # (L2) dictionary binary-feature Aho-Corasick matcher
+│   ├── dictionary.h            # (L2) dictionary binary-feature FST matcher (cpp-fstlib)
 │   ├── kernels.h               # (L2) SIMD kernels (add/relu/dot, NEON/AVX2/scalar)
 │   ├── precompute.h            # (L3) per-position precomputed table
 │   ├── model.h                  # (L3) model data types + load()
@@ -727,7 +725,7 @@ cpp-segmentlib/
 **Design decisions**
 
 - **The build system is CMake**.
-- **Zero dependencies on the inference path** (standard library only). Only the training path (`SEGMENTLIB_BUILD_TRAINING`) links BLAS.
+- **One vendored dependency on the inference path**: `third_party/cpp-fstlib` (header-only, MIT), the FST behind the dictionary matcher (Section 4.4). It is included privately by `dictionary.cpp` — `dictionary.h` hides it behind a pimpl — so it is not part of the public interface and a consumer never sees it in their include path. Everything else is the standard library. Only the training path (`SEGMENTLIB_BUILD_TRAINING`) links BLAS.
 - **The test framework is `doctest`** (header-only, fetched via CMake's `FetchContent`).
 - **`models/` and `corpus/` are not git-tracked**: added to `.gitignore`, with only download scripts like `scripts/fetch_*.sh` kept in the repository.
 - **`golden/` tests use fixed data**: pairs of known input sentences and real KyTea execution results are committed as fixed data in `tests/golden/fixtures/`. Tests are skipped when the model is absent (CI-resilient).

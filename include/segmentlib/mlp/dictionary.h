@@ -2,14 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <memory>
 #include <span>
 #include <string>
-#include <string_view>
-#include <unordered_map>
 #include <vector>
 
 #include "segmentlib/mlp/vocab.h"
-#include "segmentlib/text/aho_corasick.h"
 
 namespace segmentlib::mlp {
 
@@ -32,26 +30,50 @@ struct DictFeatures {
     std::vector<std::uint32_t> indices;
 
     // scratch (managed by DictMatcher::features_into)
-    std::vector<std::uint32_t> keys;
-    std::vector<std::vector<std::uint32_t>> per_boundary;
+    //
+    // The matcher runs over the sentence re-encoded as normalized UTF-8, so
+    // `text` is that encoding, `egc_byte_starts` its per-cluster byte offsets
+    // (byte offsets, unlike EncodedEgc::egc_starts, which indexes codepoints),
+    // and `egc_at_byte` the reverse map used to reject matches that would end
+    // in the middle of a cluster.
+    std::string text;
+    std::vector<std::uint32_t> egc_byte_starts;  // size: EGC count + 1
+    std::vector<std::uint32_t> egc_at_byte;      // size: text.size() + 1
+    // Per-boundary bitmap of active features, `mask_words` 64-bit words per
+    // boundary. The feature space is num_dicts*12, so one word covers up to
+    // five dictionaries; matches set bits and the CSR output is a bit scan,
+    // which emits each boundary's features ascending and deduplicated.
+    std::vector<std::uint64_t> masks;
+    std::size_t mask_words = 0;
 };
 
-// The dictionary feature extractor: words are
-// normalized, EGC-split, interned to dictionary-local EGC ids and compiled
-// into one runtime-built Aho-Corasick over EGC ids. Input EGCs are keyed by
-// their normalized codepoint sequence (EncodedEgc::egc_cps), never by
-// embedding rows — distinct codepoints alias under UNK, and a dictionary
-// match must not.
+// The dictionary feature extractor: entries are normalized and compiled into
+// one FST (cpp-fstlib) keyed by their normalized UTF-8 bytes, which is queried
+// with a common-prefix search from every cluster start.
+//
+// Matching is byte-level but the features are defined over EGCs, so a match is
+// kept only when its end lands on a cluster boundary. That check is what keeps
+// a dictionary entry from matching a proper prefix of a longer cluster (an
+// entry "か" must not match inside the cluster "か" + U+3099). Keying on the
+// normalized text rather than on embedding rows also keeps distinct codepoints
+// that alias under UNK from matching each other.
 class DictMatcher {
 public:
     // No dictionaries: features_into emits empty ranges everywhere.
-    DictMatcher() = default;
+    DictMatcher() noexcept;
 
     // Builds from raw word lists, one per dictionary channel. Entries are
-    // normalized (方式(a)) before EGC splitting, matching the treatment of
-    // the input side (5.7 field 17b). Invalid-UTF-8 or empty entries are
-    // dropped (they can never match).
+    // normalized (方式(a)) before use, matching the treatment of the input
+    // side (5.7 field 17b). Invalid-UTF-8 or empty entries are dropped (they
+    // can never match). An entry appearing in several channels is stored once,
+    // carrying the set of channels it belongs to.
     explicit DictMatcher(std::span<const std::vector<std::string>> dictionaries);
+
+    ~DictMatcher();
+    DictMatcher(const DictMatcher& other);
+    DictMatcher& operator=(const DictMatcher& other);
+    DictMatcher(DictMatcher&&) noexcept;
+    DictMatcher& operator=(DictMatcher&&) noexcept;
 
     [[nodiscard]] std::uint32_t num_dicts() const noexcept { return num_dicts_; }
     [[nodiscard]] std::uint32_t feature_count() const noexcept {
@@ -62,31 +84,11 @@ public:
     void features_into(const EncodedEgc& enc, DictFeatures& out) const;
 
 private:
-    // Heterogeneous hashing so lookups key on u32string_view without
-    // allocating a u32string per EGC on the scoring path.
-    struct Hash {
-        using is_transparent = void;
-        [[nodiscard]] std::size_t operator()(std::u32string_view s) const noexcept {
-            // FNV-1a over the codepoints; the map is loaded once and read
-            // per-EGC, so simplicity beats sophistication here.
-            std::size_t h = 14695981039346656037ull;
-            for (const char32_t c : s) {
-                h = (h ^ static_cast<std::size_t>(c)) * 1099511628211ull;
-            }
-            return h;
-        }
-        [[nodiscard]] std::size_t operator()(const std::u32string& s) const noexcept {
-            return operator()(std::u32string_view(s));
-        }
-    };
+    // Holds the compiled FST and the matcher viewing it; defined in the .cpp
+    // so the vendored fstlib header stays out of this public header.
+    struct Impl;
 
-    // Sentinel key for input EGCs absent from every dictionary word; it has
-    // no transition anywhere, so the automaton falls back to the root.
-    static constexpr std::uint32_t kUnknownEgc = 0xFFFFFFFFu;
-
-    std::unordered_map<std::u32string, std::uint32_t, Hash, std::equal_to<>>
-        egc_ids_;
-    text::AhoCorasick<std::uint32_t, std::uint8_t> ac_;
+    std::unique_ptr<Impl> impl_;  // null when there is nothing to match
     std::uint32_t num_dicts_ = 0;
 };
 

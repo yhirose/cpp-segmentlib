@@ -23,6 +23,14 @@ target_include_directories(segmentlib
     PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
 
+# The dictionary matcher's FST comes from cpp-fstlib, vendored under
+# third_party/. PRIVATE because dictionary.h hides it behind a pimpl, so it is
+# not part of our interface; SYSTEM because it is not ours to keep clean under
+# our own warning flags.
+target_include_directories(segmentlib
+    SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/cpp-fstlib
+)
+
 target_compile_features(segmentlib PUBLIC cxx_std_23)
 target_link_libraries(segmentlib PRIVATE segmentlib_warnings)
 

@@ -17,8 +17,8 @@ add_executable(segmentlib_tests
     unit/normalize_test.cpp
     unit/binary_reader_test.cpp
     unit/binary_writer_test.cpp
-    unit/aho_corasick_test.cpp
     unit/vocab_test.cpp
+    unit/dictionary_test.cpp
     unit/char_table_test.cpp
     unit/automaton_test.cpp
     unit/model_test.cpp

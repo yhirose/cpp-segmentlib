@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cassert>
+#include <unordered_map>
 #include <utility>
 
 #include "segmentlib/unicode/normalize.h"

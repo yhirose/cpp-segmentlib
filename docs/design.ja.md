@@ -618,8 +618,6 @@ include/segmentlib/
 │   ├── utf8.h                 # (L1) UTF-8デコード/エンコードの純粋関数群
 │   ├── egc.h                  # (L1) UAX #29 EGC分割
 │   └── normalize.h            # (L1) KyTea互換の半角→全角正規化
-├── text/
-│   └── aho_corasick.h         # (L2) Aho-Corasick構築＋マッチ（ヘッダオンリー）
 ├── kytea/
 │   ├── char_table.h           # (L2) 文字種分類 + 文字インターン表
 │   ├── automaton.h            # (L2) Aho-Corasickランタイム表現（double-array）
@@ -628,7 +626,7 @@ include/segmentlib/
 │   └── kytea_backend.h        # (L5) Backend I/F実装（tokenize）
 ├── mlp/
 │   ├── vocab.h                 # (L2) コードポイント語彙 + EGCエンコード
-│   ├── dictionary.h            # (L2) 辞書二値素性のAho-Corasickマッチャ
+│   ├── dictionary.h            # (L2) 辞書二値素性のFSTマッチャ（cpp-fstlib）
 │   ├── kernels.h               # (L2) SIMDカーネル（add/relu/dot、NEON/AVX2/scalar）
 │   ├── precompute.h            # (L3) 位置別事前計算テーブル
 │   ├── model.h                  # (L3) モデルのデータ型 + load()
@@ -727,7 +725,7 @@ cpp-segmentlib/
 **設計判断**
 
 - **ビルドシステムはCMake**。
-- **依存ライブラリは推論経路ではゼロ**（標準ライブラリのみ）。学習経路（`SEGMENTLIB_BUILD_TRAINING`）のみBLASをリンクする。
+- **推論経路の依存は vendoring した1つだけ**：`third_party/cpp-fstlib`（ヘッダオンリー、MIT）。辞書マッチャ（4.4節）が使うFSTで、`dictionary.cpp` がPRIVATEにincludeし `dictionary.h` はpimplで隠すため、公開インタフェースには現れず利用側のincludeパスにも入らない。それ以外は標準ライブラリのみ。学習経路（`SEGMENTLIB_BUILD_TRAINING`）のみBLASをリンクする。
 - **テストフレームワークは`doctest`**（ヘッダオンリー、CMakeの`FetchContent`で取得）。
 - **`models/`・`corpus/`はgit管理しない**：`.gitignore`に追加し、`scripts/fetch_*.sh`のようなダウンロードスクリプトのみをリポジトリに置く。
 - **`golden/`テストは固定データ方式**：既知の入力文とKyTea実行結果のペアを`tests/golden/fixtures/`に固定データとしてコミットする。モデル未取得時はテストがスキップされる（CI耐性）。
