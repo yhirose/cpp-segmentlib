@@ -359,7 +359,7 @@ Example: `SegmentLibMLP 1\n`. This `"SegmentLibMLP "` signature is used for back
 | 17a | `entry_count` | `uint32` | word count |
 | 17b | `entries` | NUL-terminated UTF-8 x `entry_count` | surface word forms (normalized, then UAX #29-split into EGCs, then used to build the Aho-Corasick matcher) |
 
-**Load-time processing**: (1) read vocabulary/embedding/weights, (2) build the per-position precomputed table (Section 4.6) and the expanded dictionary-feature column vectors, (3) build EGC-unit Aho-Corasick from the word list, (4) quantize `b1`/`b2` to the accumulator's integer scale.
+**Load-time processing**: (1) read vocabulary/embedding/weights, (2) build the per-position precomputed table (Section 4.6) and the expanded dictionary-feature column vectors, (3) compile the word list into the dictionary FST, (4) quantize `b1`/`b2` to the accumulator's integer scale.
 
 ### 4.8 Evaluation Results (Current Measured Values)
 
@@ -377,7 +377,22 @@ No dictionary, default configuration (w=5, d=64, H=256, patience=15, seed=42). Z
 
 Two levers were evaluated against this configuration and settled (both measured over 5 seeds). **Early-stopping patience was raised from 5 to 15 and adopted**: dev F1 keeps creeping up across plateaus a dozen epochs long, so patience 5 stopped on a plateau and cost 0.11pt of GSD test F1, while patience 15 costs only training wall-clock (about 22s → 60s) and nothing at inference. **A larger network (d=96, H=512) was rejected**: +0.23pt GSD / +0.10pt PUD for 45% of the inference speed (5.1 → 2.8 M chars/sec), a 627KB → 1511KB model and a 130ms → 467ms load. That is the same speed cost as the dictionary features rejected earlier (−48% for +0.45pt GSD), for half the accuracy and twelve times the model growth.
 
-**Speed** (M1 Pro, `bench/bench_segment`, int16+NEON, best-of-8):
+**The dictionary closes most of that gap, and the reference model this project builds and evaluates now uses one** (`--dict` itself stays opt-in in the trainer: the word list is a file the caller supplies). A dictionary extracted from the training corpus itself is worth +0.42pt GSD, but an external one is worth far more, because UD_Japanese's segmentation standard is UniDic's short unit and UniDic is that lexicon. All rows are 5-seed means against the same no-dictionary baseline; `scripts/fetch_unidic_dict.sh` reproduces the adopted one.
+
+| Dictionary | Entries | GSD F1 | PUD F1 | Model | Load | Speed |
+|---|---|---|---|---|---|---|
+| none | 0 | 98.07% | 98.59% | 0.6 MB | 130 ms | 5.1 M chars/sec |
+| training corpus, freq ≥ 2 | 8,726 | 98.49% | 98.90% | 0.7 MB | 136 ms | 3.1 |
+| IPAdic | 325,869 | 98.81% | 99.09% | 4.3 MB | 353 ms | 2.4 |
+| UniDic, 2–4 characters | 353,968 | 99.06% | 99.19% | 4.0 MB | 338 ms | 2.5 |
+| **UniDic, 2+ characters (default)** | **565,302** | **99.12%** | **99.30%** | **7.6 MB** | **505 ms** | **2.4** |
+| UniDic, all | 570,142 | 99.14% | 99.29% | 7.6 MB | 491 ms | 2.2 |
+
+Two filters matter. **Single-character entries are dropped**: they are 1% of UniDic but match constantly, and the character window already sees those characters, so removing them costs nothing measurable and returns about 12% of the speed. **Capping entry length at 4** halves the model for −0.06pt GSD / −0.11pt PUD, since the length feature saturates at 4 clusters; that variant is the one to pick when model size matters more than the last tenth of a point.
+
+Two caveats. The ranking against the linear models does not change: given the same UniDic dictionary, KyTea reaches 99.43% GSD / 99.54% PUD, still ahead. And `--dict` is repeatable, so dictionaries can be stacked as separate feature channels, but that was measured and rejected for the default: UniDic + IPAdic + the corpus dictionary buys +0.10pt for 32% of the speed and a 11.4 MB model. Merging word lists into one channel instead does nothing at all, since 95% of the corpus dictionary is already in UniDic.
+
+**Speed** (M1 Pro, `bench/bench_segment`, int16+NEON, best-of-8; no dictionary):
 
 | Genre | MLP | Real KyTea | Ratio |
 |---|---|---|---|
