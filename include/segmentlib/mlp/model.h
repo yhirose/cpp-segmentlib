@@ -127,8 +127,12 @@ private:
         DictMatcher dict;
         bool unicode_mismatch = false;
     };
+    // How field 17 is laid out: format 1 stored the dictionary as word lists,
+    // format 2 stores the compiled matcher. Nothing else differs.
+    enum class Format { WordLists, CompiledFst };
+
     static Parts parse(bytes::BinaryReader& reader, TablePrecision precision,
-                       unsigned format);
+                       Format format);
 
     explicit Model(Parts parts) noexcept : parts_(std::move(parts)) {}
     Parts parts_;

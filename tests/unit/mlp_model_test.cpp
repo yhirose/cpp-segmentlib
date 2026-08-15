@@ -32,9 +32,11 @@ namespace {
 //
 // Derived (I.1): b1_q = 500, b2_q = -1000, table[row][j] = w1_q[j]·emb_q[row],
 // dict_col[5] = llround(2·10) = 20.
-std::vector<std::byte> tiny_model_bytes() {
+// Formats 1 and 2 differ only in field 17, so the fixture writes the shared
+// part once and branches at the end rather than splicing bytes afterwards.
+std::vector<std::byte> tiny_model_bytes(unsigned format = 1) {
     bytes::BinaryWriter out;
-    out.write_line("SegmentLibMLP 1");
+    out.write_line(format == 2 ? "SegmentLibMLP 2" : "SegmentLibMLP 1");
     out.write<std::uint8_t>(2);    // w
     out.write<std::uint16_t>(1);   // d
     out.write<std::uint16_t>(1);   // H
@@ -59,37 +61,17 @@ std::vector<std::byte> tiny_model_bytes() {
     out.write<double>(0.5);       // b1
     out.write<std::int16_t>(5);   // w2
     out.write<double>(-1.0);      // b2
-    out.write<std::uint32_t>(1);  // dict 0: 1 entry
-    out.write_cstring("ああ");
-    return out.take();
-}
-
-// The same model in format 2: identical up to field 17, where the word list
-// is replaced by the compiled matcher it would have been turned into.
-std::vector<std::byte> tiny_model_bytes_v2() {
-    const std::vector<std::byte> v1 = tiny_model_bytes();
-    // Everything before the dictionary section, with the version line rewritten.
-    const std::size_t dict_start = v1.size() - (4 + std::strlen("ああ") + 1);
-    bytes::BinaryWriter out;
-    out.write_line("SegmentLibMLP 2");
-    out.write_bytes(std::span(v1).subspan(std::strlen("SegmentLibMLP 1") + 1,
-                                          dict_start -
-                                              (std::strlen("SegmentLibMLP 1") + 1)));
-
-    const std::vector<std::vector<std::string>> dicts = {{"ああ"}};
-    const CompiledDictionaries compiled = compile_dictionaries(dicts);
-    out.write<std::uint32_t>(static_cast<std::uint32_t>(compiled.fst.size()));
-    out.write_bytes(std::as_bytes(std::span(compiled.fst)));
-    out.write<std::uint32_t>(
-        static_cast<std::uint32_t>(compiled.offsets.size() - 1));
-    for (const std::uint32_t offset : compiled.offsets) {
-        out.write<std::uint32_t>(offset);
-    }
-    for (const std::uint8_t dict : compiled.dicts) {
-        out.write<std::uint8_t>(dict);
+    if (format == 2) {
+        const std::vector<std::vector<std::string>> dicts = {{"ああ"}};
+        write_compiled_dictionaries(out, compile_dictionaries(dicts));
+    } else {
+        out.write<std::uint32_t>(1);  // dict 0: 1 entry
+        out.write_cstring("ああ");
     }
     return out.take();
 }
+
+std::vector<std::byte> tiny_model_bytes_v2() { return tiny_model_bytes(2); }
 
 }  // namespace
 
@@ -309,6 +291,34 @@ TEST_CASE("format 2 loads to the same model as format 1") {
 TEST_CASE("format 2 rejects a dictionary whose channel ids are out of range") {
     std::vector<std::byte> bytes = tiny_model_bytes_v2();
     bytes.back() = std::byte{1};  // the only channel id, but num_dicts is 1
+    const auto model = Model::load_from_bytes(bytes);
+    REQUIRE(!model.has_value());
+    CHECK(model.error().code == ErrorCode::MalformedModel);
+}
+
+TEST_CASE("format 2 rejects channel-set offsets that are not ascending") {
+    std::vector<std::byte> bytes = tiny_model_bytes_v2();
+    // The tail is offsets[0], offsets[1], then the single channel id, so the
+    // last four bytes before it are offsets[1]. Make it precede offsets[0].
+    bytes[bytes.size() - 5] = std::byte{0xFF};
+    bytes[bytes.size() - 4] = std::byte{0xFF};
+    const auto model = Model::load_from_bytes(bytes);
+    REQUIRE(!model.has_value());
+    CHECK(model.error().code == ErrorCode::MalformedModel);
+}
+
+TEST_CASE("format 2 rejects an unparsable dictionary FST") {
+    std::vector<std::byte> bytes = tiny_model_bytes_v2();
+    // Field 17 begins where format 1 put its word list, and cpp-fstlib keeps
+    // its header in the *last* byte of the byte code, so that is the byte to
+    // break: it carries the output type the matcher checks against.
+    const std::size_t field17 =
+        tiny_model_bytes(1).size() - (4 + std::strlen("ああ") + 1);
+    std::uint32_t fst_size = 0;
+    std::memcpy(&fst_size, bytes.data() + field17, sizeof(fst_size));
+    REQUIRE(fst_size > 0);
+    bytes[field17 + 4 + fst_size - 1] = std::byte{0};
+
     const auto model = Model::load_from_bytes(bytes);
     REQUIRE(!model.has_value());
     CHECK(model.error().code == ErrorCode::MalformedModel);

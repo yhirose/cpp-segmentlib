@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <bit>
 #include <cassert>
+#include <ranges>
 #include <map>
 #include <optional>
 #include <sstream>
@@ -78,6 +79,10 @@ CompiledDictionaries compile_dictionaries(
     std::span<const std::vector<std::string>> dictionaries) {
     CompiledDictionaries out;
     out.num_dicts = static_cast<std::uint32_t>(dictionaries.size());
+    // A CSR with no sets still has one offset, so the "size is set count + 1"
+    // invariant holds on the paths below that give up early. Serializing an
+    // empty offsets vector wrote a set count of 0 - 1 instead.
+    out.offsets.push_back(0);
 
     // (entry, channel) pairs, sorted into the byte order fst::compile wants.
     // A flat sort rather than an associative container: dictionaries run to
@@ -141,6 +146,53 @@ CompiledDictionaries compile_dictionaries(
     out.fst = std::move(os).str();
     out.offsets = std::move(offsets);
     out.dicts = std::move(dicts);
+    return out;
+}
+
+void write_compiled_dictionaries(bytes::BinaryWriter& out,
+                                 const CompiledDictionaries& compiled) {
+    assert(!compiled.offsets.empty());
+    out.write<std::uint32_t>(static_cast<std::uint32_t>(compiled.fst.size()));
+    out.write_bytes(std::as_bytes(std::span(compiled.fst)));
+    out.write<std::uint32_t>(
+        static_cast<std::uint32_t>(compiled.offsets.size() - 1));
+    for (const std::uint32_t offset : compiled.offsets) {
+        out.write<std::uint32_t>(offset);
+    }
+    for (const std::uint8_t dict : compiled.dicts) {
+        out.write<std::uint8_t>(dict);
+    }
+}
+
+CompiledDictionaries read_compiled_dictionaries(bytes::BinaryReader& in,
+                                                std::uint32_t num_dicts) {
+    CompiledDictionaries out;
+    out.num_dicts = num_dicts;
+    out.fst = in.read_blob(in.read<std::uint32_t>());
+
+    const std::uint32_t sets = in.read<std::uint32_t>();
+    in.require_capacity(std::uint64_t{sets} + 1, sizeof(std::uint32_t));
+    out.offsets.reserve(sets + 1);
+    for (std::uint32_t s = 0; s <= sets; ++s) {
+        out.offsets.push_back(in.read<std::uint32_t>());
+    }
+    // The offsets index `dicts`, and the channels index W_dict's columns, so
+    // both are checked before anything can use them.
+    if (out.offsets.front() != 0 || !std::ranges::is_sorted(out.offsets)) {
+        throw bytes::ParseError(
+            "dictionary channel-set offsets are not ascending");
+    }
+
+    const std::uint32_t ids = out.offsets.back();
+    in.require_capacity(ids, 1);
+    out.dicts.reserve(ids);
+    for (std::uint32_t i = 0; i < ids; ++i) {
+        out.dicts.push_back(in.read<std::uint8_t>());
+    }
+    if (std::ranges::any_of(out.dicts,
+                            [&](std::uint8_t d) { return d >= num_dicts; })) {
+        throw bytes::ParseError("dictionary channel id out of range");
+    }
     return out;
 }
 
@@ -209,7 +261,10 @@ void DictMatcher::features_into(const EncodedEgc& enc, DictFeatures& out) const 
                 // The set ids come out of the FST, which a format-2 model
                 // supplies verbatim; the parser cannot check them without
                 // walking it, so the indexing below is guarded here instead.
-                if (set_id + 1 >= impl_->offsets.size()) {
+                // Widened first: set_id + 1 in uint32 wraps to 0 at the top of
+                // the range, which is exactly the value a corrupt model would
+                // need to slip past.
+                if (std::size_t{set_id} + 1 >= impl_->offsets.size()) {
                     return;
                 }
                 const std::size_t end = past - 1;

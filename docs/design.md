@@ -366,7 +366,7 @@ Example: `SegmentLibMLP 2\n`. This `"SegmentLibMLP "` signature is used for back
 
 In format 1 field 17 was instead `entry_count` (`uint32`) followed by that many NUL-terminated UTF-8 surface forms, per channel.
 
-**Load-time processing**: (1) read vocabulary/embedding/weights, (2) build the per-position precomputed table (Section 4.6) and the expanded dictionary-feature column vectors, (3) compile the word list into the dictionary FST, (4) quantize `b1`/`b2` to the accumulator's integer scale.
+**Load-time processing**: (1) read vocabulary/embedding/weights, (2) build the per-position precomputed table (Section 4.6) and the expanded dictionary-feature column vectors, (3) in format 1, compile the word list into the dictionary FST, which format 2 instead takes from the file as-is, (4) quantize `b1`/`b2` to the accumulator's integer scale.
 
 ### 4.8 Evaluation Results (Current Measured Values)
 

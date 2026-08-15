@@ -78,17 +78,7 @@ serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
     // built from. The FST is about a fifth of their size and is what the loader
     // needs, so this is both the smaller and the cheaper thing to carry.
     if (c.num_dicts > 0) {
-        const CompiledDictionaries compiled = compile_dictionaries(dictionaries);
-        out.write<std::uint32_t>(static_cast<std::uint32_t>(compiled.fst.size()));
-        out.write_bytes(std::as_bytes(std::span(compiled.fst)));
-        out.write<std::uint32_t>(
-            static_cast<std::uint32_t>(compiled.offsets.size() - 1));
-        for (const std::uint32_t offset : compiled.offsets) {
-            out.write<std::uint32_t>(offset);
-        }
-        for (const std::uint8_t dict : compiled.dicts) {
-            out.write<std::uint8_t>(dict);
-        }
+        write_compiled_dictionaries(out, compile_dictionaries(dictionaries));
     }
     return out.take();
 }

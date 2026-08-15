@@ -12,6 +12,7 @@
 #include "mlp/train/quantize.h"
 #include "segmentlib/bytes/binary_reader.h"
 #include "segmentlib/mlp/dictionary.h"
+#include "segmentlib/mlp/model.h"
 #include "segmentlib/mlp/vocab.h"
 #include "segmentlib/unicode/egc.h"
 
@@ -151,4 +152,23 @@ TEST_CASE("export_model writes the same bytes to a file") {
     REQUIRE(actual.size() == expected.size());
     CHECK(std::memcmp(actual.data(), expected.data(), actual.size()) == 0);
     std::filesystem::remove(path);
+}
+
+TEST_CASE("a dictionary channel with no usable entries still round-trips") {
+    // An empty --dict file, or one whose entries are all unusable, leaves a
+    // channel with nothing in it. The compiled form still has to be a valid
+    // CSR, or the trainer writes a model its own loader rejects.
+    const QuantizedModel q = tiny_model();
+    const Vocab vocab{{U'あ', U'い'}};
+    for (const auto& dicts : {std::vector<std::vector<std::string>>{{}},
+                              std::vector<std::vector<std::string>>{{""}},
+                              std::vector<std::vector<std::string>>{{"\xff\xfe"}}}) {
+        const auto compiled = segmentlib::mlp::compile_dictionaries(dicts);
+        CHECK(compiled.offsets.size() == 1);
+        CHECK(compiled.offsets.front() == 0);
+        const auto model =
+            segmentlib::mlp::Model::load_from_bytes(serialize_model(q, vocab, dicts));
+        REQUIRE(model.has_value());
+        CHECK(model->config().num_dicts == 1);
+    }
 }

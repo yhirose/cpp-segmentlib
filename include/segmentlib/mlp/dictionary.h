@@ -7,6 +7,8 @@
 #include <string>
 #include <vector>
 
+#include "segmentlib/bytes/binary_reader.h"
+#include "segmentlib/bytes/binary_writer.h"
 #include "segmentlib/mlp/vocab.h"
 
 namespace segmentlib::mlp {
@@ -67,6 +69,20 @@ struct CompiledDictionaries {
 // never match.
 [[nodiscard]] CompiledDictionaries compile_dictionaries(
     std::span<const std::vector<std::string>> dictionaries);
+
+// Field 17 of the model file, in format 2. One definition of the layout, used
+// by the trainer that writes it, the loader that reads it and the tests that
+// build fixtures: a writer duplicated per caller is a writer whose bugs the
+// tests reproduce instead of catching.
+//
+// The reader validates what a file can get wrong (offsets ascending from zero,
+// channel ids below num_dicts) and throws bytes::ParseError otherwise. What it
+// cannot check without walking the automaton, namely the set ids the FST
+// yields, DictMatcher bounds-checks as it matches.
+void write_compiled_dictionaries(bytes::BinaryWriter& out,
+                                 const CompiledDictionaries& compiled);
+[[nodiscard]] CompiledDictionaries read_compiled_dictionaries(
+    bytes::BinaryReader& in, std::uint32_t num_dicts);
 
 // The dictionary feature extractor: entries are normalized and compiled into
 // one FST (cpp-fstlib) keyed by their normalized UTF-8 bytes, which is queried
