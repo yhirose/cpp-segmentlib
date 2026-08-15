@@ -12,6 +12,8 @@ The corpus format is always KyTea's corpus format (full/partial annotation), use
 
 Segmentation speed is benchmarked against both KyTea and [Vaporetto](https://github.com/daac-tools/vaporetto) (used only as a comparison target, not as a backend); see [bench/README.md](bench/README.md).
 
+Tests are doctest-based and run with `just test` (or `ctest --test-dir build`); `just bench` measures the reference model in-process. The `justfile` is the shortest description of how the project is built, tested and measured.
+
 Detailed design document (English / Japanese):
 
 - Overall design: [docs/design.md](docs/design.md) / [docs/design.ja.md](docs/design.ja.md)
@@ -21,6 +23,17 @@ Detailed design document (English / Japanese):
 No model is distributed with the library, so the first step is to build one.
 The whole path below takes about a minute of compute plus a 140MB download, on
 a checkout with CMake 3.24+, a C++23 compiler and Python 3.
+
+With [just](https://github.com/casey/just) the same path is three commands,
+and `just` on its own lists everything else (tests, benchmarks, evaluation):
+
+```sh
+just setup     # fetch the corpora and the UniDic dictionary
+just model     # build, then train the reference model
+echo '日本語の文を分割します。' | just predict
+```
+
+The rest of this section is what those recipes run, for anyone without `just`.
 
 ### Build
 
