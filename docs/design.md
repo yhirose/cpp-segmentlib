@@ -273,7 +273,7 @@ For boundary i:
 | Hidden layer | 1 layer, width H=256, ReLU | Depth has little effect for pointwise classification, and inference cost is dominated by the hidden layer onward, so it is kept shallow |
 | Output | 1 unit, at inference **the sign of y** (sigmoid skipped) | `p>0.5 ⇔ y>0` |
 
-**Dictionary-match binary features `f_dict`**: matches against a dictionary (word list) are found via Aho-Corasick (run over the EGC sequence). For matches straddling/adjacent to boundary i, 12 binary features are set: 3 positional relationships (L: match's left edge touches the boundary / I: match contains the boundary / R: match's right edge touches the boundary) x 4 match-length buckets (`min(EGC length, 4)`) (12 per dictionary channel if multiple dictionaries). If multiple dictionary words match the same (positional relationship x length bucket), the feature stays 1 (binary clamp). Works with no dictionary too (`f_dict` all zeros).
+**Dictionary-match binary features `f_dict`**: matches against a dictionary (word list) are found with a common-prefix search from every cluster start, over an FST built from the entries (Section 4.7 field 17). For matches straddling/adjacent to boundary i, 12 binary features are set: 3 positional relationships (L: match's left edge touches the boundary / I: match contains the boundary / R: match's right edge touches the boundary) x 4 match-length buckets (`min(EGC length, 4)`) (12 per dictionary channel if multiple dictionaries). If multiple dictionary words match the same (positional relationship x length bucket), the feature stays 1 (binary clamp). Works with no dictionary too (`f_dict` all zeros).
 
 ### 4.5 Training
 
@@ -418,7 +418,7 @@ The training engine is self-implemented in this library (no dependency on an ext
 3b. Build vocabulary: tally codepoint frequencies, fall below-threshold ones to UNK
 4. Generate examples: for each boundary i →
      - window [i-w+1 … i+w]'s each EGC → constituent codepoint row-id sequence (edges are PAD)
-     - dictionary-match binary features f_dict (Aho-Corasick, Section 4.4)
+     - dictionary-match binary features f_dict (dictionary FST, Section 4.4)
      - label (boundary=1/non-boundary=0)
      - mask (partial-annotation unknown positions excluded from the loss, Section 4.5)
 5. Mini-batch: embedding gather → mean pooling → concat(2w·d)
