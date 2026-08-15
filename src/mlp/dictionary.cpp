@@ -74,8 +74,11 @@ DictMatcher& DictMatcher::operator=(const DictMatcher& other) {
     return *this;
 }
 
-DictMatcher::DictMatcher(std::span<const std::vector<std::string>> dictionaries)
-    : num_dicts_(static_cast<std::uint32_t>(dictionaries.size())) {
+CompiledDictionaries compile_dictionaries(
+    std::span<const std::vector<std::string>> dictionaries) {
+    CompiledDictionaries out;
+    out.num_dicts = static_cast<std::uint32_t>(dictionaries.size());
+
     // (entry, channel) pairs, sorted into the byte order fst::compile wants.
     // A flat sort rather than an associative container: dictionaries run to
     // hundreds of thousands of entries and this is on the model-load path.
@@ -90,7 +93,7 @@ DictMatcher::DictMatcher(std::span<const std::vector<std::string>> dictionaries)
         }
     }
     if (flat.empty()) {
-        return;
+        return out;
     }
     std::sort(flat.begin(), flat.end());
     flat.erase(std::unique(flat.begin(), flat.end()), flat.end());
@@ -133,10 +136,28 @@ DictMatcher::DictMatcher(std::span<const std::vector<std::string>> dictionaries)
         fst::compile<std::uint32_t>(input, os, /*sorted=*/true).first;
     assert(result == fst::Result::Success);
     if (result != fst::Result::Success) {
-        return;
+        return out;
     }
-    impl_ = std::make_unique<Impl>(std::move(os).str(), std::move(offsets),
-                                   std::move(dicts));
+    out.fst = std::move(os).str();
+    out.offsets = std::move(offsets);
+    out.dicts = std::move(dicts);
+    return out;
+}
+
+DictMatcher::DictMatcher(std::span<const std::vector<std::string>> dictionaries)
+    : DictMatcher(compile_dictionaries(dictionaries)) {}
+
+DictMatcher::DictMatcher(CompiledDictionaries compiled)
+    : num_dicts_(compiled.num_dicts) {
+    if (!compiled.fst.empty()) {
+        impl_ = std::make_unique<Impl>(std::move(compiled.fst),
+                                       std::move(compiled.offsets),
+                                       std::move(compiled.dicts));
+    }
+}
+
+bool DictMatcher::valid() const noexcept {
+    return !impl_ || static_cast<bool>(impl_->matcher);
 }
 
 void DictMatcher::features_into(const EncodedEgc& enc, DictFeatures& out) const {
@@ -184,6 +205,12 @@ void DictMatcher::features_into(const EncodedEgc& enc, DictFeatures& out) const 
                 const std::uint32_t past = out.egc_at_byte[start_byte + len];
                 if (past == kNoEgc) {
                     return;  // ends inside a cluster, so not a match here
+                }
+                // The set ids come out of the FST, which a format-2 model
+                // supplies verbatim; the parser cannot check them without
+                // walking it, so the indexing below is guarded here instead.
+                if (set_id + 1 >= impl_->offsets.size()) {
+                    return;
                 }
                 const std::size_t end = past - 1;
                 const auto bucket = static_cast<std::uint32_t>(

@@ -2,8 +2,10 @@
 
 #include <cassert>
 #include <fstream>
+#include <span>
 
 #include "segmentlib/bytes/binary_writer.h"
+#include "segmentlib/mlp/dictionary.h"
 #include "segmentlib/unicode/egc.h"
 
 namespace segmentlib::mlp::train {
@@ -35,7 +37,7 @@ serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
     assert(quantized.b1.size() == c.hidden);
 
     bytes::BinaryWriter out;
-    out.write_line("SegmentLibMLP 1");
+    out.write_line("SegmentLibMLP 2");
 
     // Config (fields 1-4b). unicode_version records which Unicode data the
     // EGC splitter used at training time; the loader warns on mismatch.
@@ -72,11 +74,20 @@ serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
     write_i16_tensor(out, quantized.w2);
     out.write<double>(quantized.b2);
 
-    // Dictionaries (field 17): raw surface word lists per channel.
-    for (const std::vector<std::string>& dict : dictionaries) {
-        out.write<std::uint32_t>(static_cast<std::uint32_t>(dict.size()));
-        for (const std::string& word : dict) {
-            out.write_cstring(word);
+    // Dictionaries (field 17): the compiled matcher, not the word lists it was
+    // built from. The FST is about a fifth of their size and is what the loader
+    // needs, so this is both the smaller and the cheaper thing to carry.
+    if (c.num_dicts > 0) {
+        const CompiledDictionaries compiled = compile_dictionaries(dictionaries);
+        out.write<std::uint32_t>(static_cast<std::uint32_t>(compiled.fst.size()));
+        out.write_bytes(std::as_bytes(std::span(compiled.fst)));
+        out.write<std::uint32_t>(
+            static_cast<std::uint32_t>(compiled.offsets.size() - 1));
+        for (const std::uint32_t offset : compiled.offsets) {
+            out.write<std::uint32_t>(offset);
+        }
+        for (const std::uint8_t dict : compiled.dicts) {
+            out.write<std::uint8_t>(dict);
         }
     }
     return out.take();

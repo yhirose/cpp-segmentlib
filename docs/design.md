@@ -317,7 +317,7 @@ Tokenization (UTF-8 → EGC splitting) follows UAX #29. Only the forward pass (i
 
 ### 4.7 Model File Format (Custom Design)
 
-The serialization format is a custom design. **It must be readable directly with `BinaryReader`'s (`bytes/binary_reader.h`) primitives (little-endian fixed-width integers, NUL-terminated strings, `\n`-terminated header lines)**, sharing the same read infrastructure as the KyTea backend. The precomputed table (Section 4.6) and Aho-Corasick automaton are not included in the file; they are **built at load time**.
+The serialization format is a custom design. **It must be readable directly with `BinaryReader`'s (`bytes/binary_reader.h`) primitives (little-endian fixed-width integers, NUL-terminated strings, `\n`-terminated header lines)**, sharing the same read infrastructure as the KyTea backend. The precomputed table (Section 4.6) is not included in the file; it is **built at load time**. The dictionary matcher is included, as a compiled FST, precisely so that it is not.
 
 **Header line (ASCII, `\n`-terminated)**
 
@@ -325,7 +325,9 @@ The serialization format is a custom design. **It must be readable directly with
 SegmentLibMLP <version>\n
 ```
 
-Example: `SegmentLibMLP 1\n`. This `"SegmentLibMLP "` signature is used for backend auto-detection (Section 2), mutually exclusive with KyTea's `"KyTea "` signature. Version mismatch is an error.
+Example: `SegmentLibMLP 2\n`. This `"SegmentLibMLP "` signature is used for backend auto-detection (Section 2), mutually exclusive with KyTea's `"KyTea "` signature. An unknown version is an error.
+
+**Versions.** Format 1 stored the dictionary as the word lists it was trained on and compiled them into a matcher on every load. Format 2, which the trainer now writes, stores that matcher instead: for a 570k-entry UniDic dictionary the model goes from 7.6 MB to 2.1 MB and load from 510 ms to 135 ms, the latter being what a model with no dictionary at all costs. Only field 17 differs, and the loader still reads format 1.
 
 **Binary body following the header line** (all little-endian):
 
@@ -356,8 +358,13 @@ Example: `SegmentLibMLP 1\n`. This `"SegmentLibMLP "` signature is used for back
 | 15 | `w2` | `int16 × H` | output-layer weights |
 | 16 | `b2` | `double` | output-layer bias (unquantized) |
 | **Dictionaries** (only when `num_dicts>0`) | | | |
-| 17a | `entry_count` | `uint32` | word count |
-| 17b | `entries` | NUL-terminated UTF-8 x `entry_count` | surface word forms (normalized, then UAX #29-split into EGCs, then used to build the Aho-Corasick matcher) |
+| 17a | `fst_size` | `uint32` | byte length of the compiled FST |
+| 17b | `fst` | `uint8 × fst_size` | the cpp-fstlib byte code, keyed by each entry's normalized UTF-8 bytes, whose output is a channel-set id. Used as-is: the loader does not decompress or rebuild it |
+| 17c | `set_count` | `uint32` | number of distinct channel sets |
+| 17d | `set_offsets` | `uint32 × (set_count+1)` | CSR offsets into `set_dicts`, ascending, first `0`. The loader rejects anything else |
+| 17e | `set_dicts` | `uint8 × set_offsets[set_count]` | dictionary channel per set member; each must be `< num_dicts` |
+
+In format 1 field 17 was instead `entry_count` (`uint32`) followed by that many NUL-terminated UTF-8 surface forms, per channel.
 
 **Load-time processing**: (1) read vocabulary/embedding/weights, (2) build the per-position precomputed table (Section 4.6) and the expanded dictionary-feature column vectors, (3) compile the word list into the dictionary FST, (4) quantize `b1`/`b2` to the accumulator's integer scale.
 
@@ -381,14 +388,14 @@ Two levers were evaluated against this configuration and settled (both measured 
 
 | Dictionary | Entries | GSD F1 | PUD F1 | Model | Load | Speed |
 |---|---|---|---|---|---|---|
-| none | 0 | 98.07% | 98.59% | 0.6 MB | 130 ms | 5.1 M chars/sec |
-| training corpus, freq ≥ 2 | 8,726 | 98.49% | 98.90% | 0.7 MB | 136 ms | 3.1 |
-| IPAdic | 325,869 | 98.81% | 99.09% | 4.3 MB | 353 ms | 2.4 |
-| UniDic, 2–4 characters | 353,968 | 99.06% | 99.19% | 4.0 MB | 338 ms | 2.5 |
-| **UniDic, 2+ characters (default)** | **565,302** | **99.12%** | **99.30%** | **7.6 MB** | **505 ms** | **2.4** |
-| UniDic, all | 570,142 | 99.14% | 99.29% | 7.6 MB | 491 ms | 2.2 |
+| none | 0 | 98.07% | 98.59% | 0.6 MB | 130 ms | 5.0 M chars/sec |
+| training corpus, freq ≥ 2 | 8,726 | 98.49% | 98.90% | 0.7 MB | 130 ms | 2.9 |
+| IPAdic | 325,869 | 98.81% | 99.09% | 1.7 MB | 137 ms | 2.4 |
+| UniDic, 2–4 characters | 353,968 | 99.06% | 99.19% | 1.7 MB | 133 ms | 2.6 |
+| **UniDic, 2+ characters (default)** | **565,302** | **99.12%** | **99.30%** | **2.1 MB** | **135 ms** | **2.4** |
+| UniDic, all | 570,144 | 99.14% | 99.29% | 2.1 MB | 134 ms | 2.3 |
 
-Two filters matter. **Single-character entries are dropped**: they are 1% of UniDic but match constantly, and the character window already sees those characters, so removing them costs nothing measurable and returns about 12% of the speed. **Capping entry length at 4** halves the model for −0.06pt GSD / −0.11pt PUD, since the length feature saturates at 4 clusters; that variant is the one to pick when model size matters more than the last tenth of a point.
+One filter matters: **single-character entries are dropped**. They are 1% of UniDic but match constantly, and the character window already sees those characters, so removing them costs nothing measurable and returns about 12% of the speed. Capping entry length at 4 was the other candidate, and format 2 retired it: the FST shares the prefixes and suffixes that made long entries expensive to store, so the cap now saves 0.4 MB rather than half the model, which is not worth −0.06pt GSD / −0.11pt PUD. For the same reason load time is now flat in dictionary size (130–137 ms across every row above), where format 1 paid up to 505 ms.
 
 Two caveats. The ranking against the linear models does not change: given the same UniDic dictionary, KyTea reaches 99.43% GSD / 99.54% PUD, still ahead. And `--dict` is repeatable, so dictionaries can be stacked as separate feature channels, but that was measured and rejected for the default: UniDic + IPAdic + the corpus dictionary buys +0.10pt for 32% of the speed and a 11.4 MB model. Merging word lists into one channel instead does nothing at all, since 95% of the corpus dictionary is already in UniDic.
 

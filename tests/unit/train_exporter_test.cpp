@@ -11,6 +11,7 @@
 #include "mlp/train/exporter.h"
 #include "mlp/train/quantize.h"
 #include "segmentlib/bytes/binary_reader.h"
+#include "segmentlib/mlp/dictionary.h"
 #include "segmentlib/mlp/vocab.h"
 #include "segmentlib/unicode/egc.h"
 
@@ -55,7 +56,7 @@ TEST_CASE("serialize_model writes the 5.7 layout byte for byte") {
     const std::vector<std::byte> bytes = serialize_model(q, vocab, dicts);
     bytes::BinaryReader in(bytes);
 
-    CHECK(in.read_line() == "SegmentLibMLP 1");
+    CHECK(in.read_line() == "SegmentLibMLP 2");
 
     // Config (fields 1-4b)
     CHECK(in.read<std::uint8_t>() == 1);    // w
@@ -94,11 +95,20 @@ TEST_CASE("serialize_model writes the 5.7 layout byte for byte") {
     CHECK(in.read<std::int16_t>() == 100);
     CHECK(in.read<double>() == 3.25);
 
-    // Dictionaries (field 17)
-    CHECK(in.read<std::uint32_t>() == 2);
-    CHECK(in.read_cstring() == "かき");
-    CHECK(in.read_cstring() == "を");
+    // Dictionaries (field 17): the compiled FST, then the channel sets its
+    // outputs index. Both entries are in channel 0, so there is one set.
+    const std::uint32_t fst_size = in.read<std::uint32_t>();
+    CHECK(fst_size > 0);
+    const std::string fst = in.read_blob(fst_size);
+    CHECK(in.read<std::uint32_t>() == 1);  // one distinct channel set
+    CHECK(in.read<std::uint32_t>() == 0);  // offsets[0]
+    CHECK(in.read<std::uint32_t>() == 1);  // offsets[1]
+    CHECK(in.read<std::uint8_t>() == 0);   // that set holds channel 0
     CHECK(in.eof());
+
+    // The blob is the compiler's output verbatim, which is what lets the
+    // loader use it without rebuilding anything.
+    CHECK(segmentlib::mlp::compile_dictionaries(dicts).fst == fst);
 }
 
 TEST_CASE("no dictionaries: wdict scale, tensor and section are absent") {
@@ -110,7 +120,7 @@ TEST_CASE("no dictionaries: wdict scale, tensor and section are absent") {
     const std::vector<std::byte> bytes = serialize_model(q, vocab, {});
     bytes::BinaryReader in(bytes);
 
-    CHECK(in.read_line() == "SegmentLibMLP 1");
+    CHECK(in.read_line() == "SegmentLibMLP 2");
     in.skip(1 + 2 + 2 + 1 + 2);          // config
     CHECK(in.read<double>() == 0.5);     // emb
     CHECK(in.read<double>() == 0.25);    // w1

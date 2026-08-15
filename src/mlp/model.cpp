@@ -1,7 +1,9 @@
 #include "segmentlib/mlp/model.h"
 
+#include <algorithm>
 #include <cmath>
 #include <cstdio>
+#include <ranges>
 #include <fstream>
 #include <string>
 #include <utility>
@@ -35,7 +37,8 @@ double read_scale(bytes::BinaryReader& in, const char* what) {
 
 }  // namespace
 
-Model::Parts Model::parse(bytes::BinaryReader& in, TablePrecision precision) {
+Model::Parts Model::parse(bytes::BinaryReader& in, TablePrecision precision,
+                          unsigned format) {
     Parts parts;
 
     // Config (fields 1-4b).
@@ -105,15 +108,48 @@ Model::Parts Model::parse(bytes::BinaryReader& in, TablePrecision precision) {
     parts.w2 = read_i16_tensor(in, h);
     const double b2 = in.read<double>();
 
-    // Dictionaries (field 17).
-    std::vector<std::vector<std::string>> dictionaries(c.num_dicts);
-    for (auto& dict : dictionaries) {
-        const std::uint32_t entries = in.read<std::uint32_t>();
-        in.require_capacity(entries, 1);  // each is at least a NUL terminator
-        dict.reserve(entries);
-        for (std::uint32_t e = 0; e < entries; ++e) {
-            dict.push_back(in.read_cstring());
+    // Dictionaries (field 17): format 2 carries the compiled matcher, format 1
+    // the word lists it has to be compiled from.
+    CompiledDictionaries compiled;
+    compiled.num_dicts = c.num_dicts;
+    if (format == 2) {
+        if (c.num_dicts > 0) {
+            compiled.fst = in.read_blob(in.read<std::uint32_t>());
+            const std::uint32_t sets = in.read<std::uint32_t>();
+            in.require_capacity(std::uint64_t{sets} + 1, sizeof(std::uint32_t));
+            compiled.offsets.reserve(sets + 1);
+            for (std::uint32_t s = 0; s <= sets; ++s) {
+                compiled.offsets.push_back(in.read<std::uint32_t>());
+            }
+            // The offsets index `dicts`, and the channels index W_dict's
+            // columns, so both are checked before anything can use them.
+            if (compiled.offsets.front() != 0 ||
+                !std::ranges::is_sorted(compiled.offsets)) {
+                throw ParseError("dictionary channel-set offsets are not ascending");
+            }
+            const std::uint32_t ids = compiled.offsets.back();
+            in.require_capacity(ids, 1);
+            compiled.dicts.reserve(ids);
+            for (std::uint32_t i = 0; i < ids; ++i) {
+                compiled.dicts.push_back(in.read<std::uint8_t>());
+            }
+            if (std::ranges::any_of(compiled.dicts, [&](std::uint8_t d) {
+                    return d >= c.num_dicts;
+                })) {
+                throw ParseError("dictionary channel id out of range");
+            }
         }
+    } else {
+        std::vector<std::vector<std::string>> dictionaries(c.num_dicts);
+        for (auto& dict : dictionaries) {
+            const std::uint32_t entries = in.read<std::uint32_t>();
+            in.require_capacity(entries, 1);  // each is at least a NUL terminator
+            dict.reserve(entries);
+            for (std::uint32_t e = 0; e < entries; ++e) {
+                dict.push_back(in.read_cstring());
+            }
+        }
+        compiled = compile_dictionaries(dictionaries);
     }
     if (!in.eof()) {
         throw ParseError("trailing bytes after the model");
@@ -153,7 +189,10 @@ Model::Parts Model::parse(bytes::BinaryReader& in, TablePrecision precision) {
         }
         parts.b2_q16 = (parts.b2_q + (1 << (kAccShift - 1))) >> kAccShift;
     }
-    parts.dict = DictMatcher(dictionaries);
+    parts.dict = DictMatcher(std::move(compiled));
+    if (!parts.dict.valid()) {
+        throw ParseError("dictionary FST is not usable");
+    }
     return parts;
 }
 
@@ -166,11 +205,14 @@ std::expected<Model, Error> Model::load_from_bytes(std::span<const std::byte> da
             return std::unexpected(Error{ErrorCode::UnsupportedModelFormat,
                                          "not a SegmentLibMLP model"});
         }
-        if (header.substr(kModelSignature.size()) != "1") {
+        const std::string version = header.substr(kModelSignature.size());
+        // Format 1 stored the dictionary as word lists and compiled them on
+        // every load; format 2 stores the compiled FST. Both still load.
+        if (version != "1" && version != "2") {
             return std::unexpected(Error{ErrorCode::UnsupportedModelFormat,
                                          "unsupported SegmentLibMLP version"});
         }
-        return Model(parse(in, precision));
+        return Model(parse(in, precision, version == "2" ? 2u : 1u));
     } catch (const ParseError&) {
         return std::unexpected(Error{ErrorCode::MalformedModel,
                                      "malformed SegmentLibMLP model"});

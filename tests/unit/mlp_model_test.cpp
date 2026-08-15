@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <cstring>
 #include <span>
 #include <vector>
 
@@ -10,6 +11,7 @@
 #include <fstream>
 
 #include "segmentlib/bytes/binary_writer.h"
+#include "segmentlib/mlp/dictionary.h"
 #include "segmentlib/mlp/mlp_backend.h"
 #include "segmentlib/mlp/model.h"
 #include "segmentlib/mlp/scorer.h"
@@ -62,6 +64,33 @@ std::vector<std::byte> tiny_model_bytes() {
     return out.take();
 }
 
+// The same model in format 2: identical up to field 17, where the word list
+// is replaced by the compiled matcher it would have been turned into.
+std::vector<std::byte> tiny_model_bytes_v2() {
+    const std::vector<std::byte> v1 = tiny_model_bytes();
+    // Everything before the dictionary section, with the version line rewritten.
+    const std::size_t dict_start = v1.size() - (4 + std::strlen("ああ") + 1);
+    bytes::BinaryWriter out;
+    out.write_line("SegmentLibMLP 2");
+    out.write_bytes(std::span(v1).subspan(std::strlen("SegmentLibMLP 1") + 1,
+                                          dict_start -
+                                              (std::strlen("SegmentLibMLP 1") + 1)));
+
+    const std::vector<std::vector<std::string>> dicts = {{"ああ"}};
+    const CompiledDictionaries compiled = compile_dictionaries(dicts);
+    out.write<std::uint32_t>(static_cast<std::uint32_t>(compiled.fst.size()));
+    out.write_bytes(std::as_bytes(std::span(compiled.fst)));
+    out.write<std::uint32_t>(
+        static_cast<std::uint32_t>(compiled.offsets.size() - 1));
+    for (const std::uint32_t offset : compiled.offsets) {
+        out.write<std::uint32_t>(offset);
+    }
+    for (const std::uint8_t dict : compiled.dicts) {
+        out.write<std::uint8_t>(dict);
+    }
+    return out.take();
+}
+
 }  // namespace
 
 TEST_CASE("load rejects wrong signatures and malformed bodies") {
@@ -75,9 +104,15 @@ TEST_CASE("load rejects wrong signatures and malformed bodies") {
     kytea.write_line("KyTea 0.4.7");
     expect_code(kytea.data(), ErrorCode::UnsupportedModelFormat);
 
+    bytes::BinaryWriter v3;
+    v3.write_line("SegmentLibMLP 3");
+    expect_code(v3.data(), ErrorCode::UnsupportedModelFormat);
+
+    // Format 2 is supported, so a truncated one is malformed rather than
+    // unsupported: the version gate and the body parser are distinct checks.
     bytes::BinaryWriter v2;
     v2.write_line("SegmentLibMLP 2");
-    expect_code(v2.data(), ErrorCode::UnsupportedModelFormat);
+    expect_code(v2.data(), ErrorCode::MalformedModel);
 
     const std::vector<std::byte> valid = tiny_model_bytes();
     expect_code(std::span(valid).first(valid.size() - 10),
@@ -244,6 +279,37 @@ TEST_CASE("load rejects a non-ascending vocabulary") {
     out.write<std::uint32_t>(0x3044);  // い
     out.write<std::uint32_t>(0x3042);  // あ — descending: reject
     const auto model = Model::load_from_bytes(out.data());
+    REQUIRE(!model.has_value());
+    CHECK(model.error().code == ErrorCode::MalformedModel);
+}
+
+TEST_CASE("format 2 loads to the same model as format 1") {
+    // The formats differ only in how the dictionary is carried, so a model
+    // written each way has to score identically. This is what lets the loader
+    // keep reading the word-list form while new models ship the compiled one.
+    const auto v1 = Model::load_from_bytes(tiny_model_bytes(), TablePrecision::Int32);
+    const auto v2 = Model::load_from_bytes(tiny_model_bytes_v2(), TablePrecision::Int32);
+    REQUIRE(v1.has_value());
+    REQUIRE(v2.has_value());
+    CHECK(v2->config().num_dicts == v1->config().num_dicts);
+    CHECK(v2->dict().num_dicts() == v1->dict().num_dicts());
+
+    const Vocab& vocab = v2->vocab();
+    EncodedEgc enc;
+    REQUIRE(vocab.encode_into("ああ", enc).has_value());
+    DictFeatures a;
+    DictFeatures b;
+    v1->dict().features_into(enc, a);
+    v2->dict().features_into(enc, b);
+    CHECK(a.indices == b.indices);
+    CHECK(a.offsets == b.offsets);
+    CHECK(!a.indices.empty());  // ああ is in the dictionary, so something fired
+}
+
+TEST_CASE("format 2 rejects a dictionary whose channel ids are out of range") {
+    std::vector<std::byte> bytes = tiny_model_bytes_v2();
+    bytes.back() = std::byte{1};  // the only channel id, but num_dicts is 1
+    const auto model = Model::load_from_bytes(bytes);
     REQUIRE(!model.has_value());
     CHECK(model.error().code == ErrorCode::MalformedModel);
 }

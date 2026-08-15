@@ -79,6 +79,17 @@ public:
         return out;
     }
 
+    // Reads `n` bytes verbatim. Used for blocks whose interior this reader
+    // does not interpret, such as the model's compiled dictionary FST.
+    [[nodiscard]] std::string read_blob(std::size_t n) {
+        if (n > remaining()) {
+            throw ParseError("blob extends past end of buffer");
+        }
+        std::string out(reinterpret_cast<const char*>(data_.data()) + pos_, n);
+        pos_ += n;
+        return out;
+    }
+
     void skip(std::size_t n) {
         if (n > remaining()) {
             throw ParseError("skip past end of buffer");

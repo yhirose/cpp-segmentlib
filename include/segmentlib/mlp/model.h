@@ -127,7 +127,8 @@ private:
         DictMatcher dict;
         bool unicode_mismatch = false;
     };
-    static Parts parse(bytes::BinaryReader& reader, TablePrecision precision);
+    static Parts parse(bytes::BinaryReader& reader, TablePrecision precision,
+                       unsigned format);
 
     explicit Model(Parts parts) noexcept : parts_(std::move(parts)) {}
     Parts parts_;

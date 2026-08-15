@@ -47,6 +47,27 @@ struct DictFeatures {
     std::size_t mask_words = 0;
 };
 
+// A dictionary set in the form the matcher actually runs on: the FST byte
+// code, plus the channel sets its outputs index into. An entry is stored once
+// however many channels contain it, and its output is the id of its set, so
+// `dicts[offsets[s] .. offsets[s+1])` are the channels of set s.
+//
+// The model file carries exactly this (Section 4.7 field 17, format 2), which
+// is what keeps a large dictionary from being recompiled on every load.
+struct CompiledDictionaries {
+    std::string fst;
+    std::vector<std::uint32_t> offsets;  // size: set count + 1, ascending
+    std::vector<std::uint8_t> dicts;     // size: offsets.back()
+    std::uint32_t num_dicts = 0;
+};
+
+// Compiles raw word lists, one per channel, into the above. Entries are
+// normalized (方式(a)) before use, matching the treatment of the input side
+// (5.7 field 17b); invalid-UTF-8 and empty entries are dropped, since they can
+// never match.
+[[nodiscard]] CompiledDictionaries compile_dictionaries(
+    std::span<const std::vector<std::string>> dictionaries);
+
 // The dictionary feature extractor: entries are normalized and compiled into
 // one FST (cpp-fstlib) keyed by their normalized UTF-8 bytes, which is queried
 // with a common-prefix search from every cluster start.
@@ -62,18 +83,24 @@ public:
     // No dictionaries: features_into emits empty ranges everywhere.
     DictMatcher() noexcept;
 
-    // Builds from raw word lists, one per dictionary channel. Entries are
-    // normalized (方式(a)) before use, matching the treatment of the input
-    // side (5.7 field 17b). Invalid-UTF-8 or empty entries are dropped (they
-    // can never match). An entry appearing in several channels is stored once,
-    // carrying the set of channels it belongs to.
+    // Builds from raw word lists, one per dictionary channel: the format-1
+    // path, which compiles on every load.
     explicit DictMatcher(std::span<const std::vector<std::string>> dictionaries);
+
+    // Adopts an already-compiled dictionary set: the format-2 path. The byte
+    // code arrives from a file here, so valid() reports whether it parsed.
+    explicit DictMatcher(CompiledDictionaries compiled);
 
     ~DictMatcher();
     DictMatcher(const DictMatcher& other);
     DictMatcher& operator=(const DictMatcher& other);
     DictMatcher(DictMatcher&&) noexcept;
     DictMatcher& operator=(DictMatcher&&) noexcept;
+
+    // False only when the byte code handed to the CompiledDictionaries
+    // constructor is not a usable FST, which a corrupt model file can produce
+    // and a locally compiled dictionary cannot.
+    [[nodiscard]] bool valid() const noexcept;
 
     [[nodiscard]] std::uint32_t num_dicts() const noexcept { return num_dicts_; }
     [[nodiscard]] std::uint32_t feature_count() const noexcept {
