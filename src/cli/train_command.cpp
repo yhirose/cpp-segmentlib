@@ -42,6 +42,13 @@ namespace {
 using namespace mlp::train;
 using mlp::Vocab;
 
+// The CLI's hyperparameter defaults are the library's, read off the structs
+// they are copied into below rather than restated as literals here: the two
+// have already had to be edited in lockstep once, and a one-sided edit would
+// compile and silently give the CLI different behaviour from the library.
+const TrainOptions kTrainDefaults;
+const AdamConfig kAdamDefaults;
+
 struct Options {
     std::string_view backend;
     std::vector<std::string_view> corpora;
@@ -55,11 +62,11 @@ struct Options {
     std::uint32_t embed_dim = 64;
     std::uint32_t hidden = 256;
     std::uint32_t min_count = 2;
-    std::uint32_t epochs = 100;
-    std::uint32_t batch_size = 256;
-    std::uint32_t patience = 15;
-    float lr = 1e-3f;
-    std::uint64_t seed = 42;
+    std::uint32_t epochs = kTrainDefaults.epochs;
+    std::uint32_t batch_size = kTrainDefaults.batch_size;
+    std::uint32_t patience = kTrainDefaults.patience;
+    float lr = kAdamDefaults.lr;
+    std::uint64_t seed = kTrainDefaults.seed;
 
     bool ok = true;
 };

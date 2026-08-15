@@ -34,14 +34,17 @@ int main() {
           "the failure is reported as IoError");
 
     // The output helper over a hand-built segmentation, so the check needs no
-    // trained model: "ab cd", with the KyTea escaping of the '/' in "c/d".
+    // trained model: "ab" + "c/d", with the KyTea escaping of the '/'.
     const std::string text = "abc/d";
     const segmentlib::Segments segments = {{0, 2}, {2, 5}};
     std::string line;
     segmentlib::append_full_line(segments, text, line);
     check(line == "ab c\\/d", "append_full_line escapes and joins");
 
-    std::printf(failures == 0 ? "consumer: all checks passed\n" : "consumer: %d check(s) failed\n",
-                failures);
-    return failures == 0 ? 0 : 1;
+    if (failures == 0) {
+        std::printf("consumer: all checks passed\n");
+        return 0;
+    }
+    std::printf("consumer: %d check(s) failed\n", failures);
+    return 1;
 }
