@@ -32,11 +32,9 @@ namespace {
 //
 // Derived (I.1): b1_q = 500, b2_q = -1000, table[row][j] = w1_q[j]·emb_q[row],
 // dict_col[5] = llround(2·10) = 20.
-// Formats 1 and 2 differ only in field 17, so the fixture writes the shared
-// part once and branches at the end rather than splicing bytes afterwards.
-std::vector<std::byte> tiny_model_bytes(unsigned format = 1) {
+std::vector<std::byte> tiny_model_bytes() {
     bytes::BinaryWriter out;
-    out.write_line(format == 2 ? "SegmentLibMLP 2" : "SegmentLibMLP 1");
+    out.write_line("SegmentLibMLP 1");
     out.write<std::uint8_t>(2);    // w
     out.write<std::uint16_t>(1);   // d
     out.write<std::uint16_t>(1);   // H
@@ -61,17 +59,10 @@ std::vector<std::byte> tiny_model_bytes(unsigned format = 1) {
     out.write<double>(0.5);       // b1
     out.write<std::int16_t>(5);   // w2
     out.write<double>(-1.0);      // b2
-    if (format == 2) {
-        const std::vector<std::vector<std::string>> dicts = {{"ああ"}};
-        write_compiled_dictionaries(out, compile_dictionaries(dicts));
-    } else {
-        out.write<std::uint32_t>(1);  // dict 0: 1 entry
-        out.write_cstring("ああ");
-    }
+    const std::vector<std::vector<std::string>> dicts = {{"ああ"}};
+    write_compiled_dictionaries(out, compile_dictionaries(dicts));
     return out.take();
 }
-
-std::vector<std::byte> tiny_model_bytes_v2() { return tiny_model_bytes(2); }
 
 }  // namespace
 
@@ -86,15 +77,15 @@ TEST_CASE("load rejects wrong signatures and malformed bodies") {
     kytea.write_line("KyTea 0.4.7");
     expect_code(kytea.data(), ErrorCode::UnsupportedModelFormat);
 
-    bytes::BinaryWriter v3;
-    v3.write_line("SegmentLibMLP 3");
-    expect_code(v3.data(), ErrorCode::UnsupportedModelFormat);
-
-    // Format 2 is supported, so a truncated one is malformed rather than
-    // unsupported: the version gate and the body parser are distinct checks.
     bytes::BinaryWriter v2;
     v2.write_line("SegmentLibMLP 2");
-    expect_code(v2.data(), ErrorCode::MalformedModel);
+    expect_code(v2.data(), ErrorCode::UnsupportedModelFormat);
+
+    // The signature is right and the version is supported, so what follows is
+    // malformed rather than unsupported: the two are distinct checks.
+    bytes::BinaryWriter empty;
+    empty.write_line("SegmentLibMLP 1");
+    expect_code(empty.data(), ErrorCode::MalformedModel);
 
     const std::vector<std::byte> valid = tiny_model_bytes();
     expect_code(std::span(valid).first(valid.size() - 10),
@@ -265,60 +256,50 @@ TEST_CASE("load rejects a non-ascending vocabulary") {
     CHECK(model.error().code == ErrorCode::MalformedModel);
 }
 
-TEST_CASE("format 2 loads to the same model as format 1") {
-    // The formats differ only in how the dictionary is carried, so a model
-    // written each way has to score identically. This is what lets the loader
-    // keep reading the word-list form while new models ship the compiled one.
-    const auto v1 = Model::load_from_bytes(tiny_model_bytes(), TablePrecision::Int32);
-    const auto v2 = Model::load_from_bytes(tiny_model_bytes_v2(), TablePrecision::Int32);
-    REQUIRE(v1.has_value());
-    REQUIRE(v2.has_value());
-    CHECK(v2->config().num_dicts == v1->config().num_dicts);
-    CHECK(v2->dict().num_dicts() == v1->dict().num_dicts());
-
-    const Vocab& vocab = v2->vocab();
-    EncodedEgc enc;
-    REQUIRE(vocab.encode_into("ああ", enc).has_value());
-    DictFeatures a;
-    DictFeatures b;
-    v1->dict().features_into(enc, a);
-    v2->dict().features_into(enc, b);
-    CHECK(a.indices == b.indices);
-    CHECK(a.offsets == b.offsets);
-    CHECK(!a.indices.empty());  // ああ is in the dictionary, so something fired
-}
-
-TEST_CASE("format 2 rejects a dictionary whose channel ids are out of range") {
-    std::vector<std::byte> bytes = tiny_model_bytes_v2();
+TEST_CASE("load rejects a dictionary whose channel ids are out of range") {
+    std::vector<std::byte> bytes = tiny_model_bytes();
     bytes.back() = std::byte{1};  // the only channel id, but num_dicts is 1
     const auto model = Model::load_from_bytes(bytes);
     REQUIRE(!model.has_value());
     CHECK(model.error().code == ErrorCode::MalformedModel);
 }
 
-TEST_CASE("format 2 rejects channel-set offsets that are not ascending") {
-    std::vector<std::byte> bytes = tiny_model_bytes_v2();
-    // The tail is offsets[0], offsets[1], then the single channel id, so the
-    // last four bytes before it are offsets[1]. Make it precede offsets[0].
-    bytes[bytes.size() - 5] = std::byte{0xFF};
-    bytes[bytes.size() - 4] = std::byte{0xFF};
+// Field 17 trails the model, so its parts are found by walking back from the
+// end: set count, the offsets, then the channel ids. The fixture's dictionary
+// is what says how many of each there are.
+struct Field17Layout {
+    std::size_t set_count;   // byte offset of the set count
+    std::size_t offsets;     // byte offset of offsets[0]
+    std::size_t fst_last;    // byte offset of the FST's last byte
+};
+
+Field17Layout field17_of(const std::vector<std::byte>& bytes) {
+    const auto compiled = compile_dictionaries(
+        std::vector<std::vector<std::string>>{{"ああ"}});
+    const std::size_t offsets =
+        bytes.size() - compiled.dicts.size() -
+        sizeof(std::uint32_t) * compiled.offsets.size();
+    const std::size_t set_count = offsets - sizeof(std::uint32_t);
+    return {set_count, offsets, set_count - 1};
+}
+
+TEST_CASE("load rejects channel-set offsets that do not start at zero") {
+    std::vector<std::byte> bytes = tiny_model_bytes();
+    const Field17Layout at = field17_of(bytes);
+    // The CSR's first offset has to be 0. (The ascending half of the same
+    // check needs three offsets to exercise, which this fixture does not have.)
+    bytes[at.offsets] = std::byte{5};
     const auto model = Model::load_from_bytes(bytes);
     REQUIRE(!model.has_value());
     CHECK(model.error().code == ErrorCode::MalformedModel);
 }
 
-TEST_CASE("format 2 rejects an unparsable dictionary FST") {
-    std::vector<std::byte> bytes = tiny_model_bytes_v2();
-    // Field 17 begins where format 1 put its word list, and cpp-fstlib keeps
-    // its header in the *last* byte of the byte code, so that is the byte to
-    // break: it carries the output type the matcher checks against.
-    const std::size_t field17 =
-        tiny_model_bytes(1).size() - (4 + std::strlen("ああ") + 1);
-    std::uint32_t fst_size = 0;
-    std::memcpy(&fst_size, bytes.data() + field17, sizeof(fst_size));
-    REQUIRE(fst_size > 0);
-    bytes[field17 + 4 + fst_size - 1] = std::byte{0};
-
+TEST_CASE("load rejects an unparsable dictionary FST") {
+    std::vector<std::byte> bytes = tiny_model_bytes();
+    // cpp-fstlib keeps its header in the *last* byte of the byte code, and
+    // that byte carries the output type the matcher checks itself against, so
+    // clearing it is what makes the blob unusable rather than merely wrong.
+    bytes[field17_of(bytes).fst_last] = std::byte{0};
     const auto model = Model::load_from_bytes(bytes);
     REQUIRE(!model.has_value());
     CHECK(model.error().code == ErrorCode::MalformedModel);

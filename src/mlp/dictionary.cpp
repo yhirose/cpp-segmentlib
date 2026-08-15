@@ -258,7 +258,7 @@ void DictMatcher::features_into(const EncodedEgc& enc, DictFeatures& out) const 
                 if (past == kNoEgc) {
                     return;  // ends inside a cluster, so not a match here
                 }
-                // The set ids come out of the FST, which a format-2 model
+                // The set ids come out of the FST, which a model file
                 // supplies verbatim; the parser cannot check them without
                 // walking it, so the indexing below is guarded here instead.
                 // Widened first: set_id + 1 in uint32 wraps to 0 at the top of

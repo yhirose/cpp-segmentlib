@@ -37,7 +37,7 @@ serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
     assert(quantized.b1.size() == c.hidden);
 
     bytes::BinaryWriter out;
-    out.write_line("SegmentLibMLP 2");
+    out.write_line("SegmentLibMLP 1");
 
     // Config (fields 1-4b). unicode_version records which Unicode data the
     // EGC splitter used at training time; the loader warns on mismatch.
@@ -75,8 +75,8 @@ serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
     out.write<double>(quantized.b2);
 
     // Dictionaries (field 17): the compiled matcher, not the word lists it was
-    // built from. The FST is about a fifth of their size and is what the loader
-    // needs, so this is both the smaller and the cheaper thing to carry.
+    // built from. The FST is about a fifth of their size and is what the
+    // loader needs, so it is both the smaller and the cheaper thing to carry.
     if (c.num_dicts > 0) {
         write_compiled_dictionaries(out, compile_dictionaries(dictionaries));
     }

@@ -54,8 +54,8 @@ struct DictFeatures {
 // however many channels contain it, and its output is the id of its set, so
 // `dicts[offsets[s] .. offsets[s+1])` are the channels of set s.
 //
-// The model file carries exactly this (Section 4.7 field 17, format 2), which
-// is what keeps a large dictionary from being recompiled on every load.
+// The model file carries exactly this (Section 4.7 field 17), which is what
+// keeps a large dictionary from being recompiled on every load.
 struct CompiledDictionaries {
     std::string fst;
     std::vector<std::uint32_t> offsets;  // size: set count + 1, ascending
@@ -70,10 +70,10 @@ struct CompiledDictionaries {
 [[nodiscard]] CompiledDictionaries compile_dictionaries(
     std::span<const std::vector<std::string>> dictionaries);
 
-// Field 17 of the model file, in format 2. One definition of the layout, used
-// by the trainer that writes it, the loader that reads it and the tests that
-// build fixtures: a writer duplicated per caller is a writer whose bugs the
-// tests reproduce instead of catching.
+// Field 17 of the model file. One definition of the layout, used by the
+// trainer that writes it, the loader that reads it and the tests that build
+// fixtures: a writer duplicated per caller is a writer whose bugs the tests
+// reproduce instead of catching.
 //
 // The reader validates what a file can get wrong (offsets ascending from zero,
 // channel ids below num_dicts) and throws bytes::ParseError otherwise. What it
@@ -99,12 +99,12 @@ public:
     // No dictionaries: features_into emits empty ranges everywhere.
     DictMatcher() noexcept;
 
-    // Builds from raw word lists, one per dictionary channel: the format-1
-    // path, which compiles on every load.
+    // Builds from raw word lists, one per dictionary channel, compiling them.
+    // This is the trainer's path; the loader takes the compiled form below.
     explicit DictMatcher(std::span<const std::vector<std::string>> dictionaries);
 
-    // Adopts an already-compiled dictionary set: the format-2 path. The byte
-    // code arrives from a file here, so valid() reports whether it parsed.
+    // Adopts an already-compiled dictionary set. The byte code arrives from a
+    // file here, so valid() reports whether it parsed.
     explicit DictMatcher(CompiledDictionaries compiled);
 
     ~DictMatcher();

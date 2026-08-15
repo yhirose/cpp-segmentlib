@@ -57,7 +57,7 @@ TEST_CASE("serialize_model writes the 5.7 layout byte for byte") {
     const std::vector<std::byte> bytes = serialize_model(q, vocab, dicts);
     bytes::BinaryReader in(bytes);
 
-    CHECK(in.read_line() == "SegmentLibMLP 2");
+    CHECK(in.read_line() == "SegmentLibMLP 1");
 
     // Config (fields 1-4b)
     CHECK(in.read<std::uint8_t>() == 1);    // w
@@ -121,7 +121,7 @@ TEST_CASE("no dictionaries: wdict scale, tensor and section are absent") {
     const std::vector<std::byte> bytes = serialize_model(q, vocab, {});
     bytes::BinaryReader in(bytes);
 
-    CHECK(in.read_line() == "SegmentLibMLP 2");
+    CHECK(in.read_line() == "SegmentLibMLP 1");
     in.skip(1 + 2 + 2 + 1 + 2);          // config
     CHECK(in.read<double>() == 0.5);     // emb
     CHECK(in.read<double>() == 0.25);    // w1

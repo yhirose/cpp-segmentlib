@@ -325,9 +325,7 @@ The serialization format is a custom design. **It must be readable directly with
 SegmentLibMLP <version>\n
 ```
 
-Example: `SegmentLibMLP 2\n`. This `"SegmentLibMLP "` signature is used for backend auto-detection (Section 2), mutually exclusive with KyTea's `"KyTea "` signature. An unknown version is an error.
-
-**Versions.** Format 1 stored the dictionary as the word lists it was trained on and compiled them into a matcher on every load. Format 2, which the trainer now writes, stores that matcher instead: for a 570k-entry UniDic dictionary the model goes from 7.6 MB to 2.1 MB and load from 510 ms to 135 ms, the latter being what a model with no dictionary at all costs. Only field 17 differs, and the loader still reads format 1.
+Example: `SegmentLibMLP 1\n`. This `"SegmentLibMLP "` signature is used for backend auto-detection (Section 2), mutually exclusive with KyTea's `"KyTea "` signature. An unknown version is an error.
 
 **Binary body following the header line** (all little-endian):
 
@@ -359,14 +357,13 @@ Example: `SegmentLibMLP 2\n`. This `"SegmentLibMLP "` signature is used for back
 | 16 | `b2` | `double` | output-layer bias (unquantized) |
 | **Dictionaries** (only when `num_dicts>0`) | | | |
 | 17a | `fst_size` | `uint32` | byte length of the compiled FST |
-| 17b | `fst` | `uint8 × fst_size` | the cpp-fstlib byte code, keyed by each entry's normalized UTF-8 bytes, whose output is a channel-set id. Used as-is: the loader does not decompress or rebuild it |
+| 17b | `fst` | `uint8 × fst_size` | the cpp-fstlib byte code, keyed by each entry's normalized UTF-8 bytes, whose output is a channel-set id. Used as-is: the loader does not decompress or rebuild it. Carrying the compiled matcher rather than the word list is what makes a 570k-entry UniDic dictionary cost 2.1 MB and 135 ms to load, against 7.6 MB and 510 ms for the words alone |
 | 17c | `set_count` | `uint32` | number of distinct channel sets |
 | 17d | `set_offsets` | `uint32 × (set_count+1)` | CSR offsets into `set_dicts`, ascending, first `0`. The loader rejects anything else |
 | 17e | `set_dicts` | `uint8 × set_offsets[set_count]` | dictionary channel per set member; each must be `< num_dicts` |
 
-In format 1 field 17 was instead `entry_count` (`uint32`) followed by that many NUL-terminated UTF-8 surface forms, per channel.
 
-**Load-time processing**: (1) read vocabulary/embedding/weights, (2) build the per-position precomputed table (Section 4.6) and the expanded dictionary-feature column vectors, (3) in format 1, compile the word list into the dictionary FST, which format 2 instead takes from the file as-is, (4) quantize `b1`/`b2` to the accumulator's integer scale.
+**Load-time processing**: (1) read vocabulary/embedding/weights, (2) build the per-position precomputed table (Section 4.6) and the expanded dictionary-feature column vectors, (3) point the dictionary matcher at the FST in the file, (4) quantize `b1`/`b2` to the accumulator's integer scale.
 
 ### 4.8 Evaluation Results (Current Measured Values)
 
@@ -395,7 +392,7 @@ Two levers were evaluated against this configuration and settled (both measured 
 | **UniDic, 2+ characters (default)** | **565,302** | **99.12%** | **99.30%** | **2.1 MB** | **135 ms** | **2.4** |
 | UniDic, all | 570,144 | 99.14% | 99.29% | 2.1 MB | 134 ms | 2.3 |
 
-One filter matters: **single-character entries are dropped**. They are 1% of UniDic but match constantly, and the character window already sees those characters, so removing them costs nothing measurable and returns about 12% of the speed. Capping entry length at 4 was the other candidate, and format 2 retired it: the FST shares the prefixes and suffixes that made long entries expensive to store, so the cap now saves 0.4 MB rather than half the model, which is not worth −0.06pt GSD / −0.11pt PUD. For the same reason load time is now flat in dictionary size (130–137 ms across every row above), where format 1 paid up to 505 ms.
+One filter matters: **single-character entries are dropped**. They are 1% of UniDic but match constantly, and the character window already sees those characters, so removing them costs nothing measurable and returns about 12% of the speed. Capping entry length at 4 was the other candidate, and is not worth it: the FST shares the prefixes and suffixes that would make long entries expensive to store, so the cap saves 0.4 MB for −0.06pt GSD / −0.11pt PUD. The same sharing is why load time barely moves with dictionary size (130–137 ms across every row above).
 
 Two caveats. The ranking against the linear models does not change: given the same UniDic dictionary, KyTea reaches 99.43% GSD / 99.54% PUD, still ahead. And `--dict` is repeatable, so dictionaries can be stacked as separate feature channels, but that was measured and rejected for the default: UniDic + IPAdic + the corpus dictionary buys +0.10pt for 32% of the speed and a 11.4 MB model. Merging word lists into one channel instead does nothing at all, since 95% of the corpus dictionary is already in UniDic.
 
