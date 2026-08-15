@@ -62,4 +62,6 @@ if(SEGMENTLIB_BUILD_TRAINING)
     endif()
 endif()
 
-add_subdirectory(cli)
+if(SEGMENTLIB_BUILD_CLI)
+    add_subdirectory(cli)
+endif()

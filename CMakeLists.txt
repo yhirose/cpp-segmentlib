@@ -5,7 +5,10 @@ set(CMAKE_CXX_STANDARD 23)
 set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_CXX_EXTENSIONS OFF)
 
-if(NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
+# Only when this is the build being run. Under add_subdirectory()/FetchContent
+# the cache is the consuming project's, so forcing a build type there decides
+# it for their code too, from a dependency they added for one static library.
+if(PROJECT_IS_TOP_LEVEL AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
@@ -17,8 +20,13 @@ if(MSVC)
     add_compile_options(/EHsc /utf-8)
 endif()
 
-option(SEGMENTLIB_BUILD_TESTS "Build the test suite" ON)
-option(SEGMENTLIB_BUILD_BENCH "Build the benchmark tools" ON)
+# Developer targets default to on for a standalone build and off for a
+# consumer: a project that pulls this in via FetchContent wants one static
+# library, not our test suite (which fetches doctest over the network), our
+# benchmarks, or our CLI in their `all` target.
+option(SEGMENTLIB_BUILD_TESTS "Build the test suite" ${PROJECT_IS_TOP_LEVEL})
+option(SEGMENTLIB_BUILD_BENCH "Build the benchmark tools" ${PROJECT_IS_TOP_LEVEL})
+option(SEGMENTLIB_BUILD_CLI "Build the segmenter CLI" ${PROJECT_IS_TOP_LEVEL})
 option(SEGMENTLIB_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
 
 # Warnings are carried by an interface target rather than add_compile_options so

@@ -742,6 +742,7 @@ cpp-segmentlib/
   ctest --test-dir build --output-on-failure
   ```
   Always specify `-DCMAKE_BUILD_TYPE=Release` when benchmarking (a `Debug` build makes inference tens of times slower).
+- **Using it from another project**: `add_subdirectory()` or `FetchContent`, then link the `segmentlib` target; its public include path comes with it. The developer targets — the test suite (which fetches doctest over the network), the benchmarks and the `segmenter` CLI — default to on for a standalone build and **off when segmentlib is not the top-level project**, so a consumer's `all` builds one static library. `CMAKE_BUILD_TYPE` is likewise only defaulted to `Release` when standalone, since under `FetchContent` the cache belongs to the consumer. There is no install/export set, so `find_package(segmentlib)` is not supported.
 - **CI**: `.github/workflows/ci.yml`. 6 jobs: macOS arm64 (NEON), Linux x86_64 (AVX2/scalar, GCC 14 + OpenBLAS), Windows (MSVC, AVX2, best-effort), an ASan + UBSan job (the only one built with assertions on), and a golden job that fetches the KyTea model (cached) and sets `SEGMENTLIB_REQUIRE_GOLDEN` so a missing model fails instead of skipping. All jobs build with `-DSEGMENTLIB_WARNINGS_AS_ERRORS=ON`.
 
 ## 9. Benchmarks (Inference Speed)
