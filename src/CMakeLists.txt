@@ -16,11 +16,15 @@ add_library(segmentlib STATIC
     output.cpp
 )
 
+# PROJECT_SOURCE_DIR, not CMAKE_SOURCE_DIR: the latter is the *top-level*
+# source dir, so under add_subdirectory()/FetchContent it resolves to the
+# consuming project's include/ and segmentlib fails to compile its own sources.
 target_include_directories(segmentlib
-    PUBLIC ${CMAKE_SOURCE_DIR}/include
+    PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
 
 target_compile_features(segmentlib PUBLIC cxx_std_23)
+target_link_libraries(segmentlib PRIVATE segmentlib_warnings)
 
 if(SEGMENTLIB_BUILD_TRAINING)
     add_library(segmentlib_train STATIC
@@ -37,8 +41,10 @@ if(SEGMENTLIB_BUILD_TRAINING)
     # Training headers are internal (no public headers, mlp_module_design 0節);
     # consumers of this target (CLI train, tests) include them as
     # "mlp/train/*.h" relative to src/.
-    target_include_directories(segmentlib_train PUBLIC ${CMAKE_SOURCE_DIR}/src)
+    target_include_directories(segmentlib_train
+        PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/src>)
     target_link_libraries(segmentlib_train PUBLIC segmentlib)
+    target_link_libraries(segmentlib_train PRIVATE segmentlib_warnings)
 
     # BLAS is linked here and nowhere else (design.ja.md 5.9).
     if(APPLE)

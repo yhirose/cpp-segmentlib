@@ -27,7 +27,7 @@ add_executable(segmentlib_tests
     golden/golden_test.cpp
 )
 
-target_link_libraries(segmentlib_tests PRIVATE segmentlib doctest::doctest)
+target_link_libraries(segmentlib_tests PRIVATE segmentlib doctest::doctest segmentlib_warnings)
 
 if(SEGMENTLIB_BUILD_TRAINING)
     target_sources(segmentlib_tests PRIVATE
@@ -43,9 +43,9 @@ if(SEGMENTLIB_BUILD_TRAINING)
 endif()
 
 target_compile_definitions(segmentlib_tests PRIVATE
-    SEGMENTLIB_MODEL_PATH="${CMAKE_SOURCE_DIR}/models/kytea/jp-0.4.7-5.mod"
-    SEGMENTLIB_GOLDEN_DIR="${CMAKE_SOURCE_DIR}/tests/golden/fixtures"
-    SEGMENTLIB_GRAPHEME_BREAK_TEST_PATH="${CMAKE_SOURCE_DIR}/tests/data/GraphemeBreakTest.txt"
+    SEGMENTLIB_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/kytea/jp-0.4.7-5.mod"
+    SEGMENTLIB_GOLDEN_DIR="${PROJECT_SOURCE_DIR}/tests/golden/fixtures"
+    SEGMENTLIB_GRAPHEME_BREAK_TEST_PATH="${PROJECT_SOURCE_DIR}/tests/data/GraphemeBreakTest.txt"
 )
 
 add_test(NAME segmentlib_tests COMMAND segmentlib_tests)

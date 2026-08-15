@@ -19,6 +19,24 @@ endif()
 
 option(SEGMENTLIB_BUILD_TESTS "Build the test suite" ON)
 option(SEGMENTLIB_BUILD_BENCH "Build the benchmark tools" ON)
+option(SEGMENTLIB_WARNINGS_AS_ERRORS "Treat compiler warnings as errors" OFF)
+
+# Warnings are carried by an interface target rather than add_compile_options so
+# they apply to our code only: doctest arrives via FetchContent and is not ours
+# to keep warning-clean. Linked PRIVATE everywhere, so consumers never inherit
+# them either.
+add_library(segmentlib_warnings INTERFACE)
+if(MSVC)
+    target_compile_options(segmentlib_warnings INTERFACE /W4)
+    if(SEGMENTLIB_WARNINGS_AS_ERRORS)
+        target_compile_options(segmentlib_warnings INTERFACE /WX)
+    endif()
+else()
+    target_compile_options(segmentlib_warnings INTERFACE -Wall -Wextra)
+    if(SEGMENTLIB_WARNINGS_AS_ERRORS)
+        target_compile_options(segmentlib_warnings INTERFACE -Werror)
+    endif()
+endif()
 # Training is a development tool, physically separated from inference: the
 # segmentlib_train target is opt-in and is the only place BLAS is linked
 # (design.ja.md 5.9, mlp_module_design.ja.md 0/5節).

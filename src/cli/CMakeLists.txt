@@ -4,7 +4,7 @@ add_executable(segmenter
     train_command.cpp
 )
 
-target_link_libraries(segmenter PRIVATE segmentlib)
+target_link_libraries(segmenter PRIVATE segmentlib segmentlib_warnings)
 
 # The train subcommand gets its real implementation only when the training
 # components are built; otherwise it stays a stub that points at the option.

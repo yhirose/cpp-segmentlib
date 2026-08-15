@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <string>
@@ -20,17 +21,38 @@
 
 using namespace segmentlib;
 
-// Byte-for-byte parity with KyTea on a fixed corpus. The reference output in
-// expected.txt was produced by `kytea -model jp-0.4.7-5.mod -notags`. Requires
-// the (gitignored) model; if it is absent the test is skipped rather than
-// failing, so CI without the model still passes.
-TEST_CASE("KyTea byte-exact parity on the golden corpus") {
+namespace {
+
+// True when the 128 MB KyTea model is present. Absence normally skips, since
+// the model is gitignored and fetched on demand — but a skip that reports
+// success is indistinguishable from a pass, and these are the two highest-value
+// tests in the suite (byte parity with real KyTea, and parallel-vs-serial
+// agreement). Setting SEGMENTLIB_REQUIRE_GOLDEN turns absence into a failure so
+// a CI job that is supposed to have fetched the model cannot silently stop
+// running them.
+bool golden_model_available() {
     const std::filesystem::path model_path{SEGMENTLIB_MODEL_PATH};
-    if (model_path.empty() || !std::filesystem::exists(model_path)) {
-        MESSAGE("golden: model not found at '" << SEGMENTLIB_MODEL_PATH
-                                               << "'; run scripts/fetch_kytea_model.sh. Skipping.");
+    if (!model_path.empty() && std::filesystem::exists(model_path)) {
+        return true;
+    }
+    const bool required = std::getenv("SEGMENTLIB_REQUIRE_GOLDEN") != nullptr;
+    REQUIRE_MESSAGE(!required,
+                    "SEGMENTLIB_REQUIRE_GOLDEN is set but the model is missing at '"
+                        << SEGMENTLIB_MODEL_PATH << "'");
+    MESSAGE("golden: model not found at '" << SEGMENTLIB_MODEL_PATH
+                                           << "'; run scripts/fetch_kytea_model.sh. Skipping.");
+    return false;
+}
+
+}  // namespace
+
+// Byte-for-byte parity with KyTea on a fixed corpus. The reference output in
+// expected.txt was produced by `kytea -model jp-0.4.7-5.mod -notags`.
+TEST_CASE("KyTea byte-exact parity on the golden corpus") {
+    if (!golden_model_available()) {
         return;
     }
+    const std::filesystem::path model_path{SEGMENTLIB_MODEL_PATH};
 
     auto segmenter = Segmenter::load(model_path);
     REQUIRE(segmenter.has_value());
@@ -62,10 +84,10 @@ TEST_CASE("KyTea byte-exact parity on the golden corpus") {
 // The parallel batch API must produce exactly the same result as serial
 // tokenize() for every input, regardless of thread count.
 TEST_CASE("tokenize_all matches serial tokenize") {
-    const std::filesystem::path model_path{SEGMENTLIB_MODEL_PATH};
-    if (model_path.empty() || !std::filesystem::exists(model_path)) {
-        return;  // model absent: covered by the skip message above
+    if (!golden_model_available()) {
+        return;
     }
+    const std::filesystem::path model_path{SEGMENTLIB_MODEL_PATH};
     auto segmenter = Segmenter::load(model_path);
     REQUIRE(segmenter.has_value());
 
