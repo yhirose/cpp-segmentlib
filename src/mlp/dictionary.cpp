@@ -98,23 +98,30 @@ DictMatcher::DictMatcher(std::span<const std::vector<std::string>> dictionaries)
     // Intern the channel sets: an entry's output is a small set id rather than
     // the set itself, which keeps the output alphabet tiny however many
     // dictionaries (up to the format's 255) an entry belongs to.
-    std::map<std::vector<std::uint8_t>, std::uint32_t> set_ids;
+    // The set is keyed as a byte string, not as a vector of channel ids:
+    // ordering two vectors here reaches lexicographical_compare_three_way,
+    // where GCC 14 cannot bound the memcmp length and rejects the build under
+    // -Werror=stringop-overread. Strings compare through basic_string::compare
+    // and are unaffected.
+    std::map<std::string, std::uint32_t> set_ids;
     std::vector<std::uint32_t> offsets{0};
     std::vector<std::uint8_t> dicts;
     std::vector<std::pair<std::string, std::uint32_t>> input;
-    std::vector<std::uint8_t> channels;
+    std::string set_key;
     for (std::size_t i = 0; i < flat.size();) {
         // Consecutive rows sharing a key are that entry's channels, ascending.
         std::size_t j = i;
-        channels.clear();
+        set_key.clear();
         while (j < flat.size() && flat[j].first == flat[i].first) {
-            channels.push_back(flat[j].second);
+            set_key.push_back(static_cast<char>(flat[j].second));
             ++j;
         }
         const auto [it, inserted] = set_ids.try_emplace(
-            channels, static_cast<std::uint32_t>(offsets.size() - 1));
+            set_key, static_cast<std::uint32_t>(offsets.size() - 1));
         if (inserted) {
-            dicts.insert(dicts.end(), channels.begin(), channels.end());
+            for (const char channel : set_key) {
+                dicts.push_back(static_cast<std::uint8_t>(channel));
+            }
             offsets.push_back(static_cast<std::uint32_t>(dicts.size()));
         }
         input.emplace_back(std::move(flat[i].first), it->second);

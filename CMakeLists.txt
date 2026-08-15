@@ -12,12 +12,15 @@ if(PROJECT_IS_TOP_LEVEL AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYP
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
 
-# MSVC needs /EHsc for exceptions (doctest requires them) and /utf-8 for the
-# UTF-8 string literals throughout the codebase. add_compile_options keeps
-# these even when CI overrides CMAKE_CXX_FLAGS (e.g. to add /arch:AVX2), which
-# would otherwise drop CMake's default /EHsc and disable exceptions.
+# MSVC needs /EHsc for exceptions (doctest requires them), /utf-8 for the
+# UTF-8 string literals throughout the codebase, and /Zc:__cplusplus so that
+# __cplusplus reports the standard actually in use: without it MSVC still
+# answers 199711L, and cpp-fstlib refuses to compile on its C++17 check.
+# add_compile_options keeps these even when CI overrides CMAKE_CXX_FLAGS (e.g.
+# to add /arch:AVX2), which would otherwise drop CMake's default /EHsc and
+# disable exceptions.
 if(MSVC)
-    add_compile_options(/EHsc /utf-8)
+    add_compile_options(/EHsc /utf-8 /Zc:__cplusplus)
 endif()
 
 # Developer targets default to on for a standalone build and off for a
