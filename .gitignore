@@ -1,4 +1,7 @@
-/models/
+# The MLP reference model under models/mlp/ is committed (it is this
+# project's own artifact, 3 MB); the fetched KyTea model and the corpora
+# are not.
+/models/kytea/
 /corpus/
 /build/
 /build-release/

@@ -46,6 +46,8 @@ endif()
 target_compile_definitions(segmentlib_tests PRIVATE
     SEGMENTLIB_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/kytea/jp-0.4.7-5.mod"
     SEGMENTLIB_GOLDEN_DIR="${PROJECT_SOURCE_DIR}/tests/golden/fixtures"
+    SEGMENTLIB_MLP_MODEL_PATH="${PROJECT_SOURCE_DIR}/models/mlp/ja-ud-gsd.mod"
+    SEGMENTLIB_MLP_GOLDEN_DIR="${PROJECT_SOURCE_DIR}/tests/golden/mlp_fixtures"
     SEGMENTLIB_GRAPHEME_BREAK_TEST_PATH="${PROJECT_SOURCE_DIR}/tests/data/GraphemeBreakTest.txt"
 )
 

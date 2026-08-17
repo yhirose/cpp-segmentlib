@@ -719,7 +719,9 @@ cpp-segmentlib/
 │   │       └── expected.txt      # `kytea -notags`の出力
 │   └── consumer/                 # 利用側プロジェクトの模擬。check_consumer.shが
 │                                 # ビルドする。本体ビルドには含まれない
-├── models/                       # (gitignore) KyTea/Vaporettoモデル
+├── models/
+│   ├── mlp/                      # コミット済みMLP参照モデル + NOTICE（CC BY-SA 4.0）
+│   └── kytea/                    # (gitignore) fetchするKyTeaモデル
 ├── corpus/                       # (gitignore) 評価用コーパス
 ├── bench/                        # 推論ベンチ（9節）
 │   ├── setup.sh / run.sh / README.md
@@ -747,7 +749,7 @@ cpp-segmentlib/
 - **ビルドシステムはCMake**。
 - **推論経路の依存は vendoring した1つだけ**：`third_party/cpp-fstlib`（ヘッダオンリー、MIT）。辞書マッチャ（4.4節）が使うFSTで、`mlp/dictionary.h` が `fst::map` を直接持ちincludeするため、ヘッダオンリーの推論経路を使う側も一緒にコンパイルすることになり、includeパスに `third_party/` が必要（`segmentlib` CMakeターゲットがSYSTEM interface includeとして持つ）。includeは `"cpp-fstlib/fstlib.h"` と書き、includeパスは `third_party/` にしてある。利用側プロジェクトがこれを隠すには `fstlib.h` というファイル名だけでなくディレクトリ名の一致まで必要になる。それ以外は標準ライブラリのみ。学習経路（`SEGMENTLIB_BUILD_TRAINING`）のみBLASをリンクする。
 - **テストフレームワークは`doctest`**（ヘッダオンリー、CMakeの`FetchContent`で取得）。
-- **`models/`・`corpus/`はgit管理しない**：`.gitignore`に追加し、`scripts/fetch_*.sh`のようなダウンロードスクリプトのみをリポジトリに置く。
+- **`models/kytea/`・`corpus/`はgit管理しない**：`.gitignore`に追加し、`scripts/fetch_*.sh`のようなダウンロードスクリプトのみをリポジトリに置く。例外は`models/mlp/`（学習済みMLP参照モデル、約2.1MB、本プロジェクト自身の成果物）で、NOTICEと一緒にコミットし、cloneした直後にダウンロードも学習も無しで分かち書きが動くようにする。その出力は回帰テストで固定される。再学習はリリース時の行為（docs/RELEASING.md）。
 - **`golden/`テストは固定データ方式**：既知の入力文とKyTea実行結果のペアを`tests/golden/fixtures/`に固定データとしてコミットする。モデル未取得時はテストがスキップされる（CI耐性）。
 
 ### 8.4 ビルド／ツールチェーン要件

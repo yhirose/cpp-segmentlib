@@ -6,7 +6,7 @@ Each character boundary is classified independently as a binary decision (split 
 The public API is a single interface, backed internally by a set of interchangeable backends:
 
 - **KyTea-compatible backend** — loads KyTea's trained models as-is and performs inference with the same feature extraction and linear SVM classifier. Byte-for-byte agreement with KyTea's own output is verified.
-- **Custom MLP backend** — uses a quantized (int16) MLP with a SIMD-accelerated scorer instead of a linear SVM as the classifier. On UD_Japanese-GSD (no dictionary) it runs ~3.7x faster than KyTea on the same CPU thread, and trails a KyTea model trained on the same data by ~0.7-0.9pt of boundary F1.
+- **Custom MLP backend** — uses a quantized (int16) MLP with a SIMD-accelerated scorer instead of a linear SVM as the classifier. On UD_Japanese-GSD (no dictionary) it runs ~3.7x faster than KyTea on the same CPU thread, and trails a KyTea model trained on the same data by ~0.7-0.9pt of boundary F1. A trained reference model ships in the repository ([models/mlp/](models/mlp/), ~2.1 MB; the model file is CC BY-SA 4.0 — see its NOTICE — separately from this repository's MIT code).
 
 The corpus format is always KyTea's corpus format (full/partial annotation), used consistently across both backends for training and accuracy comparison.
 
@@ -20,18 +20,30 @@ Detailed design document (English / Japanese):
 
 ## Getting started
 
-No model is distributed with the library, so the first step is to build one.
-The whole path below takes about a minute of compute plus a 140MB download, on
-a checkout with CMake 3.24+, a C++23 compiler and Python 3. (C++23 is what the
-trainer, the CLI and the test suite need; segmentation itself is header-only and
-builds as C++17 — see "Using the library" below.)
+The MLP reference model ships in the repository, so a fresh clone segments
+text after a build alone — no download, no training:
 
-With [just](https://github.com/casey/just) the same path is three commands,
-and `just` on its own lists everything else (tests, benchmarks, evaluation):
+```sh
+cmake -S . -B build -DCMAKE_BUILD_TYPE=Release
+cmake --build build --parallel
+echo '日本語の文を分割します。' | build/src/cli/segmenter predict --model models/mlp/ja-ud-gsd.mod
+```
+
+(The KyTea-compatible backend needs a KyTea model, which is 122 MB and not
+bundled; `scripts/fetch_kytea_model.sh` fetches one.)
+
+Retraining the reference model — needed only when changing the trainer or
+the corpus — takes about a minute of compute plus a 140MB download, on a
+checkout with CMake 3.24+, a C++23 compiler and Python 3. (C++23 is what the
+trainer, the CLI and the test suite need; segmentation itself is header-only
+and builds as C++17 — see "Using the library" below.)
+
+With [just](https://github.com/casey/just) that path is three commands, and
+`just` on its own lists everything else (tests, benchmarks, evaluation):
 
 ```sh
 just setup     # fetch the corpora and the UniDic dictionary
-just model     # build, then train the reference model
+just model     # build, then (re)train the reference model
 echo '日本語の文を分割します。' | just predict
 ```
 
@@ -60,13 +72,15 @@ build/src/cli/segmenter train --backend mlp \
     --corpus corpus/ud-gsd/train.kytea.txt \
     --dev-corpus corpus/ud-gsd/dev.kytea.txt \
     --dict corpus/ud-gsd/dict_unidic.txt \
-    --model-out corpus/ud-gsd/mlp.mod
+    --model-out models/mlp/ja-ud-gsd.mod
 ```
 
 That is 99.1% boundary F1 on GSD test and 99.3% on UD_Japanese-PUD, in a 2.1MB
 model (Section 4.8 of the design document has the comparison against KyTea and
 Vaporetto, and against other dictionaries). Training takes about 40 seconds and
-stops itself when the dev score stops improving.
+stops itself when the dev score stops improving. Note that this overwrites the
+bundled reference model, whose output a regression test pins — retraining is a
+release-time act with its own checklist (docs/RELEASING.md), not a build step.
 
 The dictionary is optional. Dropping `--dict` gives a 0.6MB model that loads
 and runs faster but scores about a point lower, and carries no third-party
@@ -79,7 +93,7 @@ dictionary out of the training corpus itself, needing no external data.
 space-separated words:
 
 ```sh
-$ echo '日本語の文を分割します。' | build/src/cli/segmenter predict --model corpus/ud-gsd/mlp.mod
+$ echo '日本語の文を分割します。' | build/src/cli/segmenter predict --model models/mlp/ja-ud-gsd.mod
 日本 語 の 文 を 分割 し ます 。
 ```
 

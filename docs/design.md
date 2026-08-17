@@ -720,7 +720,9 @@ cpp-segmentlib/
 │   │       └── expected.txt      # `kytea -notags`'s output
 │   └── consumer/                 # a downstream project; built by check_consumer.sh,
 │                                 # not part of the main build
-├── models/                       # (gitignored) KyTea/Vaporetto models
+├── models/
+│   ├── mlp/                      # committed MLP reference model + NOTICE (CC BY-SA 4.0)
+│   └── kytea/                    # (gitignored) fetched KyTea model
 ├── corpus/                       # (gitignored) evaluation corpora
 ├── bench/                        # inference benchmarks (Section 9)
 │   ├── setup.sh / run.sh / README.md
@@ -748,7 +750,7 @@ cpp-segmentlib/
 - **The build system is CMake**.
 - **One vendored dependency on the inference path**: `third_party/cpp-fstlib` (header-only, MIT), the FST behind the dictionary matcher (Section 4.4). `mlp/dictionary.h` holds the `fst::map` directly and includes it, so a consumer of the header-only inference path compiles it too and needs `third_party/` on their include path (the `segmentlib` CMake target carries it as a SYSTEM interface include). The include is written as `"cpp-fstlib/fstlib.h"` and the include path is `third_party/`, so shadowing it from a consuming project takes a matching directory name rather than just a file called `fstlib.h`. Everything else is the standard library. Only the training path (`SEGMENTLIB_BUILD_TRAINING`) links BLAS.
 - **The test framework is `doctest`** (header-only, fetched via CMake's `FetchContent`).
-- **`models/` and `corpus/` are not git-tracked**: added to `.gitignore`, with only download scripts like `scripts/fetch_*.sh` kept in the repository.
+- **`models/kytea/` and `corpus/` are not git-tracked**: added to `.gitignore`, with only download scripts like `scripts/fetch_*.sh` kept in the repository. The exception is `models/mlp/`, the trained MLP reference model (~2.1 MB, this project's own artifact): it is committed with its NOTICE so a fresh clone segments text without a download or a training run, and its output is pinned by a regression test. Retraining it is a release-time act (docs/RELEASING.md).
 - **`golden/` tests use fixed data**: pairs of known input sentences and real KyTea execution results are committed as fixed data in `tests/golden/fixtures/`. Tests are skipped when the model is absent (CI-resilient).
 
 ### 8.4 Build/Toolchain Requirements

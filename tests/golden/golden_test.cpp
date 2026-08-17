@@ -18,6 +18,12 @@
 #ifndef SEGMENTLIB_GOLDEN_DIR
 #define SEGMENTLIB_GOLDEN_DIR ""
 #endif
+#ifndef SEGMENTLIB_MLP_MODEL_PATH
+#define SEGMENTLIB_MLP_MODEL_PATH ""
+#endif
+#ifndef SEGMENTLIB_MLP_GOLDEN_DIR
+#define SEGMENTLIB_MLP_GOLDEN_DIR ""
+#endif
 
 using namespace segmentlib;
 
@@ -58,6 +64,46 @@ TEST_CASE("KyTea byte-exact parity on the golden corpus") {
     REQUIRE(segmenter.has_value());
 
     const std::filesystem::path dir{SEGMENTLIB_GOLDEN_DIR};
+    std::ifstream input(dir / "input.txt");
+    std::ifstream expected(dir / "expected.txt");
+    REQUIRE(input.good());
+    REQUIRE(expected.good());
+
+    std::string line;
+    std::string want;
+    std::string got;
+    std::size_t line_no = 0;
+    while (std::getline(input, line)) {
+        ++line_no;
+        REQUIRE_MESSAGE(std::getline(expected, want), "expected.txt shorter than input.txt");
+
+        auto segments = segmenter->tokenize(line);
+        REQUIRE(segments.has_value());
+        got.clear();
+        append_full_line(*segments, line, got);
+
+        CHECK_MESSAGE(got == want, "line " << line_no << ": got [" << got << "] want [" << want << "]");
+    }
+    CHECK_FALSE(std::getline(expected, want));  // no extra expected lines
+}
+
+// Regression pin for the bundled MLP reference model, which ships in the
+// repository (models/mlp/, see its NOTICE). Unlike the KyTea case above there
+// is no external implementation to be byte-compatible with, so expected.txt is
+// not an oracle: it is this model's own output, frozen so that a change to the
+// inference path (or an accidental retrain) cannot silently alter results. The
+// model is committed, so unlike the KyTea test there is no skip path. When the
+// model is deliberately retrained, the fixture is regenerated and the diff
+// reviewed by eye -- docs/RELEASING.md step 2.
+TEST_CASE("bundled MLP model output does not drift") {
+    const std::filesystem::path model_path{SEGMENTLIB_MLP_MODEL_PATH};
+    REQUIRE_MESSAGE(std::filesystem::exists(model_path),
+                    "bundled model missing at '" << SEGMENTLIB_MLP_MODEL_PATH << "'");
+
+    auto segmenter = Segmenter::load_mlp(model_path);
+    REQUIRE(segmenter.has_value());
+
+    const std::filesystem::path dir{SEGMENTLIB_MLP_GOLDEN_DIR};
     std::ifstream input(dir / "input.txt");
     std::ifstream expected(dir / "expected.txt");
     REQUIRE(input.good());

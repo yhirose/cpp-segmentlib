@@ -5,7 +5,7 @@ build_dir := "build"
 # numbers come from what a user would actually link.
 bench_dir := "build-release"
 
-model := "corpus/ud-gsd/mlp.mod"
+model := "models/mlp/ja-ud-gsd.mod"
 corpus_dir := "corpus/ud-gsd"
 
 # List available recipes
@@ -85,3 +85,7 @@ bench-all:
 # Remove the build directories
 clean:
     rm -rf {{build_dir}} {{build_dir}}-werror {{bench_dir}}
+
+# Tag and push a release (dry-run; --run to execute; bumps minor if the model changed, else patch)
+release *args:
+    @scripts/release.sh {{args}}

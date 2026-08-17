@@ -11,7 +11,12 @@ SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 OUT_DIR="${SCRIPT_DIR}/../corpus/ud-gsd"
 mkdir -p "${OUT_DIR}"
 
-BASE_URL="https://raw.githubusercontent.com/UniversalDependencies/UD_Japanese-GSD/master"
+# Pinned to a release tag, not master: the bundled reference model
+# (models/mlp/) records exactly which corpus it was trained on, and an
+# unpinned fetch would make that record meaningless. r2.18 is commit
+# 33e7310b58308e85fd2b33a2fc3ef3e434f821c7.
+UD_GSD_TAG="r2.18"
+BASE_URL="https://raw.githubusercontent.com/UniversalDependencies/UD_Japanese-GSD/refs/tags/${UD_GSD_TAG}"
 
 for split in train dev test; do
     echo "Downloading ${split}.conllu..."
