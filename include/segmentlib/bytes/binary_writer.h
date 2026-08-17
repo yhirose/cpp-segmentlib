@@ -1,14 +1,15 @@
 #pragma once
 
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <span>
 #include <string_view>
 #include <type_traits>
 #include <utility>
 #include <vector>
+
+#include "segmentlib/support/endian.h"
+#include "segmentlib/support/span.h"
 
 namespace segmentlib::bytes {
 
@@ -30,7 +31,7 @@ namespace segmentlib::bytes {
 // simplicity without a meaningful memory cost.
 class BinaryWriter {
 public:
-    [[nodiscard]] std::span<const std::byte> data() const noexcept { return buf_; }
+    [[nodiscard]] Span<const std::byte> data() const noexcept { return buf_; }
     [[nodiscard]] std::size_t size() const noexcept { return buf_.size(); }
 
     // Moves the accumulated buffer out; the writer is empty afterwards.
@@ -42,8 +43,8 @@ public:
     void write(T value) {
         static_assert(std::is_trivially_copyable_v<T>);
         if constexpr (std::is_integral_v<T> && sizeof(T) > 1) {
-            if constexpr (std::endian::native == std::endian::big) {
-                value = std::byteswap(value);
+            if constexpr (kNativeIsBigEndian) {
+                value = byteswap(value);
             }
         }
         const std::size_t pos = buf_.size();
@@ -57,28 +58,24 @@ public:
     // consumes). `s` must not itself contain a NUL, or the reader would stop
     // short; model strings (words, header fields) never do.
     void write_cstring(std::string_view s) {
-        write_bytes(as_bytes(s));
+        write_bytes(as_bytes(Span<const char>(s)));
         write<std::uint8_t>(0);
     }
 
     // Writes `line` followed by '\n' (the form BinaryReader::read_line
     // consumes). `line` must not contain '\n'.
     void write_line(std::string_view line) {
-        write_bytes(as_bytes(line));
+        write_bytes(as_bytes(Span<const char>(line)));
         write<std::uint8_t>('\n');
     }
 
     // Appends raw bytes as-is (e.g. a whole int16 tensor already in
     // little-endian order).
-    void write_bytes(std::span<const std::byte> bytes) {
+    void write_bytes(Span<const std::byte> bytes) {
         buf_.insert(buf_.end(), bytes.begin(), bytes.end());
     }
 
 private:
-    static std::span<const std::byte> as_bytes(std::string_view s) noexcept {
-        return {reinterpret_cast<const std::byte*>(s.data()), s.size()};
-    }
-
     std::vector<std::byte> buf_;
 };
 

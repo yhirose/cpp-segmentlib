@@ -7,7 +7,7 @@ Revision: 2c9af63710777ee69b4b9062aa98be4349e93d88
 Upstream publishes no tags, so the revision above is what "current" means
 here. Update by replacing the header and this line together.
 
-Note that this directory is on the compiler's include path (SYSTEM PRIVATE,
-see src/CMakeLists.txt), so a file added here can shadow a standard header.
-That is why this file is not called VERSION: on a case-insensitive
-filesystem it would answer `#include <version>`.
+The include path is the *parent* directory (`third_party/`, SYSTEM INTERFACE,
+see src/CMakeLists.txt), and `mlp/dictionary.h` includes
+`"cpp-fstlib/fstlib.h"`. Nothing in this directory is reachable as a bare
+header name, so a file added here shadows nothing.

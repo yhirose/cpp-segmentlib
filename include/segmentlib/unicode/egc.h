@@ -2,11 +2,12 @@
 
 #include <cstddef>
 #include <cstdint>
-#include <expected>
 #include <string_view>
 #include <vector>
 
+#include "segmentlib/support/expected.h"
 #include "segmentlib/types.h"
+#include "segmentlib/unicode/utf8.h"
 
 namespace segmentlib::unicode {
 
@@ -55,11 +56,36 @@ struct GraphemeProps {
     bool extended_pictographic;  // Extended_Pictographic, for GB11 (emoji ZWJ)
 };
 
+namespace detail {
+
+#include "segmentlib/unicode/egc_table.inc"  // kEgcStage1, kEgcStage2, kEgcTableUnicodeVersion
+
+// The generated table and the header constant must describe the same Unicode
+// version; regenerate the table and bump kEgcUnicodeVersion together.
+static_assert(kEgcTableUnicodeVersion == kEgcUnicodeVersion);
+
+inline constexpr std::size_t kBlockSize = 256;
+
+}  // namespace detail
+
 // Looks up the grapheme properties of a codepoint. Codepoints outside the
 // Unicode range (> U+10FFFF) get the default properties (Other/None/false);
 // callers pass codepoints that came from utf8::decode, so this never happens
 // in practice.
-[[nodiscard]] GraphemeProps grapheme_props(char32_t cp) noexcept;
+[[nodiscard]] inline GraphemeProps grapheme_props(char32_t cp) noexcept {
+    std::uint8_t packed = 0;
+    if (cp < 0x110000) {
+        const std::size_t block = detail::kEgcStage1[cp >> 8];
+        packed = detail::kEgcStage2[block * detail::kBlockSize + (cp & 0xFF)];
+    }
+    // Positional, not designated: designated initializers are C++20, and the
+    // member order here is the declaration order of GraphemeProps above.
+    return GraphemeProps{
+        static_cast<GraphemeBreak>(packed & 0x0F),
+        static_cast<IndicConjunctBreak>((packed >> 4) & 0x03),
+        (packed & 0x40) != 0,
+    };
+}
 
 // Incremental UAX #29 extended-grapheme-cluster boundary detector.
 //
@@ -75,7 +101,80 @@ class GraphemeBreaker {
 public:
     // Feeds the next codepoint; returns true if an extended grapheme cluster
     // boundary precedes it.
-    [[nodiscard]] bool next(char32_t cp) noexcept;
+    [[nodiscard]] bool next(char32_t cp) noexcept {
+        const GraphemeProps props = grapheme_props(cp);
+        const GraphemeBreak cur = props.gcb;
+
+        bool is_break;
+        if (at_start_) {
+            is_break = true;  // GB1: break at start of text
+        } else if (prev_ == GraphemeBreak::CR && cur == GraphemeBreak::LF) {
+            is_break = false;  // GB3: keep CR LF together
+        } else if (prev_ == GraphemeBreak::Control || prev_ == GraphemeBreak::CR ||
+                   prev_ == GraphemeBreak::LF) {
+            is_break = true;  // GB4: break after controls
+        } else if (cur == GraphemeBreak::Control || cur == GraphemeBreak::CR ||
+                   cur == GraphemeBreak::LF) {
+            is_break = true;  // GB5: break before controls
+        } else if (prev_ == GraphemeBreak::L &&
+                   (cur == GraphemeBreak::L || cur == GraphemeBreak::V ||
+                    cur == GraphemeBreak::LV || cur == GraphemeBreak::LVT)) {
+            is_break = false;  // GB6: Hangul L x (L|V|LV|LVT)
+        } else if ((prev_ == GraphemeBreak::LV || prev_ == GraphemeBreak::V) &&
+                   (cur == GraphemeBreak::V || cur == GraphemeBreak::T)) {
+            is_break = false;  // GB7: Hangul (LV|V) x (V|T)
+        } else if ((prev_ == GraphemeBreak::LVT || prev_ == GraphemeBreak::T) &&
+                   cur == GraphemeBreak::T) {
+            is_break = false;  // GB8: Hangul (LVT|T) x T
+        } else if (cur == GraphemeBreak::Extend || cur == GraphemeBreak::ZWJ) {
+            is_break = false;  // GB9: keep Extend / ZWJ with what precedes
+        } else if (cur == GraphemeBreak::SpacingMark) {
+            is_break = false;  // GB9a: keep spacing marks attached
+        } else if (prev_ == GraphemeBreak::Prepend) {
+            is_break = false;  // GB9b: keep prepend characters attached
+        } else if (gb9c_ == Gb9cState::ConsonantLinker &&
+                   props.incb == IndicConjunctBreak::Consonant) {
+            is_break = false;  // GB9c: Indic conjunct (consonant linker x consonant)
+        } else if (gb11_ == Gb11State::PictographicZwj && props.extended_pictographic) {
+            is_break = false;  // GB11: emoji ZWJ sequence
+        } else if (prev_ == GraphemeBreak::RegionalIndicator &&
+                   cur == GraphemeBreak::RegionalIndicator && (ri_run_ % 2) == 1) {
+            is_break = false;  // GB12/GB13: join regional indicators pairwise
+        } else {
+            is_break = true;  // GB999: break everywhere else
+        }
+
+        // Update the multi-codepoint rule states with the codepoint just fed.
+
+        // GB11 tracks ExtPict Extend* ZWJ; the Extend/ZWJ continuations only
+        // count while a pictographic sequence is open.
+        if (gb11_ == Gb11State::Pictographic && cur == GraphemeBreak::Extend) {
+            // still Pictographic
+        } else if (gb11_ == Gb11State::Pictographic && cur == GraphemeBreak::ZWJ) {
+            gb11_ = Gb11State::PictographicZwj;
+        } else if (props.extended_pictographic) {
+            gb11_ = Gb11State::Pictographic;
+        } else {
+            gb11_ = Gb11State::None;
+        }
+
+        // GB9c tracks Consonant [Extend|Linker]* with at least one Linker.
+        if (props.incb == IndicConjunctBreak::Consonant) {
+            gb9c_ = Gb9cState::Consonant;
+        } else if (gb9c_ != Gb9cState::None && props.incb == IndicConjunctBreak::Linker) {
+            gb9c_ = Gb9cState::ConsonantLinker;
+        } else if (gb9c_ != Gb9cState::None && props.incb == IndicConjunctBreak::Extend) {
+            // sequence stays open in its current state
+        } else {
+            gb9c_ = Gb9cState::None;
+        }
+
+        ri_run_ = cur == GraphemeBreak::RegionalIndicator ? ri_run_ + 1 : 0;
+
+        at_start_ = false;
+        prev_ = cur;
+        return is_break;
+    }
 
     // Returns to the start-of-text state, so the breaker can be reused for
     // another text without reconstruction.
@@ -98,6 +197,29 @@ private:
     std::uint32_t ri_run_ = 0;
 };
 
+// Same as egc_split(), but fills a caller-owned offsets vector (its buffer is
+// reused, avoiding per-call allocation on the hot path). On error the vector
+// contents are unspecified.
+[[nodiscard]] inline Expected<void, Error>
+egc_split_into(std::string_view utf8, std::vector<std::size_t>& offsets) {
+    offsets.clear();
+    GraphemeBreaker breaker;
+    std::size_t pos = 0;
+    while (pos < utf8.size()) {
+        const auto decoded = decode(utf8.substr(pos));
+        if (!decoded) {
+            return Unexpected(Error{ErrorCode::InvalidUtf8,
+                                    "malformed UTF-8 in EGC segmentation"});
+        }
+        if (breaker.next(decoded->codepoint)) {
+            offsets.push_back(pos);
+        }
+        pos += decoded->length;
+    }
+    offsets.push_back(utf8.size());  // GB2: end of text
+    return {};
+}
+
 // Splits UTF-8 text into extended grapheme clusters (UAX #29).
 //
 // Returns the byte offsets of the cluster starts plus a final entry equal to
@@ -105,13 +227,13 @@ private:
 // bytes [offsets[i], offsets[i+1]). Empty input yields {0} (zero clusters).
 // The constituent codepoints of a cluster can be re-decoded from its byte
 // span with utf8::decode. Returns InvalidUtf8 on malformed input.
-[[nodiscard]] std::expected<std::vector<std::size_t>, Error>
-egc_split(std::string_view utf8);
-
-// Same as egc_split(), but fills a caller-owned offsets vector (its buffer is
-// reused, avoiding per-call allocation on the hot path). On error the vector
-// contents are unspecified.
-[[nodiscard]] std::expected<void, Error>
-egc_split_into(std::string_view utf8, std::vector<std::size_t>& offsets);
+[[nodiscard]] inline Expected<std::vector<std::size_t>, Error>
+egc_split(std::string_view utf8) {
+    std::vector<std::size_t> offsets;
+    if (auto r = egc_split_into(utf8, offsets); !r) {
+        return Unexpected(r.error());
+    }
+    return offsets;
+}
 
 }  // namespace segmentlib::unicode

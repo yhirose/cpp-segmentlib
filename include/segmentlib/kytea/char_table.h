@@ -3,15 +3,17 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
-#include <span>
 #include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
+#include "segmentlib/bytes/binary_reader.h"
+#include "segmentlib/support/expected.h"
+#include "segmentlib/support/span.h"
 #include "segmentlib/types.h"
 #include "segmentlib/unicode/normalize.h"
+#include "segmentlib/unicode/utf8.h"
 
 namespace segmentlib::kytea {
 
@@ -108,7 +110,34 @@ class CharTable {
 public:
     // Parses the model's character-map string. Throws bytes::ParseError on
     // malformed UTF-8 (caught at the model-loading boundary).
-    explicit CharTable(std::string_view char_map_utf8);
+    explicit CharTable(std::string_view char_map_utf8) {
+        CharId next_id = 1;      // id 0 is the reserved empty-string sentinel
+        id_to_cp_.push_back(0);  // index 0: the empty-string sentinel
+        std::size_t pos = 0;
+        while (pos < char_map_utf8.size()) {
+            const auto dec = unicode::decode(char_map_utf8.substr(pos));
+            if (!dec) {
+                throw bytes::ParseError("invalid UTF-8 in model character map");
+            }
+            // First occurrence wins; a repeated character does not consume an id.
+            if (ids_.try_emplace(dec->codepoint, next_id).second) {
+                id_to_cp_.push_back(dec->codepoint);  // index == next_id
+                ++next_id;
+            }
+            pos += dec->length;
+        }
+
+        // Build the BMP fast-path table and precompute the type-marker ids.
+        bmp_ids_.assign(kBmpSize, kNoChar);
+        for (const auto& [cp, id] : ids_) {
+            if (cp < kBmpSize) {
+                bmp_ids_[cp] = id;
+            }
+        }
+        for (std::size_t t = 0; t < type_ids_.size(); ++t) {
+            type_ids_[t] = id_of(type_marker(static_cast<CharType>(t)));
+        }
+    }
 
     // Interned id for a codepoint, or kNoChar if it was never seen in training.
     // BMP codepoints (the common case) resolve through a direct-indexed table;
@@ -123,16 +152,49 @@ public:
     // strings are stored in the model) back to UTF-8, the inverse of the id
     // assignment done at construction. The reserved empty-string id 0 yields no
     // output. Used off the hot path, at load time, to materialize tag strings.
-    [[nodiscard]] std::string decode(std::span<const CharId> ids) const;
-
-    // Encodes UTF-8 input into id sequences plus byte offsets. Normalization is
-    // applied before interning. Returns InvalidUtf8 on malformed input.
-    [[nodiscard]] std::expected<EncodedText, Error> encode(std::string_view utf8) const;
+    [[nodiscard]] std::string decode(Span<const CharId> ids) const {
+        std::string out;
+        for (const CharId id : ids) {
+            const char32_t cp = id < id_to_cp_.size() ? id_to_cp_[id] : 0;
+            if (cp != 0) {  // id 0 (empty-string sentinel) contributes nothing
+                unicode::encode(cp, out);
+            }
+        }
+        return out;
+    }
 
     // Same as encode(), but fills a caller-owned EncodedText (its buffers are
     // reused, avoiding per-call allocation on the hot path).
-    [[nodiscard]] std::expected<void, Error> encode_into(std::string_view utf8,
-                                                         EncodedText& out) const;
+    [[nodiscard]] Expected<void, Error> encode_into(std::string_view utf8,
+                                                    EncodedText& out) const {
+        out.char_ids.clear();
+        out.type_ids.clear();
+        out.offsets.clear();
+        std::size_t pos = 0;
+        while (pos < utf8.size()) {
+            const auto dec = unicode::decode(utf8.substr(pos));
+            if (!dec) {
+                return Unexpected(Error{ErrorCode::InvalidUtf8, "invalid UTF-8 in input"});
+            }
+            const char32_t norm = normalize(dec->codepoint);
+            out.offsets.push_back(pos);
+            out.char_ids.push_back(id_of(norm));
+            out.type_ids.push_back(type_id(classify(norm)));
+            pos += dec->length;
+        }
+        out.offsets.push_back(utf8.size());
+        return {};
+    }
+
+    // Encodes UTF-8 input into id sequences plus byte offsets. Normalization is
+    // applied before interning. Returns InvalidUtf8 on malformed input.
+    [[nodiscard]] Expected<EncodedText, Error> encode(std::string_view utf8) const {
+        EncodedText out;
+        if (auto r = encode_into(utf8, out); !r) {
+            return Unexpected(r.error());
+        }
+        return out;
+    }
 
     // Interned id of the type marker for each CharType (precomputed so the type
     // n-gram encoding needs no per-character lookup).
@@ -143,7 +205,10 @@ public:
 private:
     static constexpr char32_t kBmpSize = 0x1'0000;
 
-    [[nodiscard]] CharId id_of_astral(char32_t cp) const noexcept;
+    [[nodiscard]] CharId id_of_astral(char32_t cp) const noexcept {
+        const auto it = ids_.find(cp);
+        return it == ids_.end() ? kNoChar : it->second;
+    }
 
     std::unordered_map<char32_t, CharId> ids_;  // authoritative; astral fallback
     std::vector<CharId> bmp_ids_;               // size kBmpSize, direct-indexed

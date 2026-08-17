@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Generates the grapheme-break property table for unicode/egc.
 
-Reads three UCD data files and emits src/unicode/egc_table.inc, a two-stage
+Reads three UCD data files and emits include/segmentlib/unicode/egc_table.inc, a two-stage
 lookup table mapping every codepoint to the packed properties the UAX #29
 extended-grapheme-cluster rules need:
 
@@ -171,7 +171,7 @@ def main():
     parser.add_argument("--download", action="store_true",
                         help="download the UCD files into --ucd-dir first")
     parser.add_argument("--out", type=Path,
-                        default=repo_root / "src" / "unicode" / "egc_table.inc")
+                        default=repo_root / "include" / "segmentlib" / "unicode" / "egc_table.inc")
     args = parser.parse_args()
 
     if args.download:

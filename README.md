@@ -22,7 +22,9 @@ Detailed design document (English / Japanese):
 
 No model is distributed with the library, so the first step is to build one.
 The whole path below takes about a minute of compute plus a 140MB download, on
-a checkout with CMake 3.24+, a C++23 compiler and Python 3.
+a checkout with CMake 3.24+, a C++23 compiler and Python 3. (C++23 is what the
+trainer, the CLI and the test suite need; segmentation itself is header-only and
+builds as C++17 — see "Using the library" below.)
 
 With [just](https://github.com/casey/just) the same path is three commands,
 and `just` on its own lists everything else (tests, benchmarks, evaluation):
@@ -88,6 +90,39 @@ does. `--threads N` segments the input in parallel.
 
 In C++ the equivalent is `Segmenter::load(path)` followed by `tokenize(text)`;
 see Section 6 of the design document.
+
+## Using the library
+
+Segmentation is **header-only and C++17**. There is no library to build or
+link: put `include/` and `third_party/` on the include path (the
+`segmentlib` CMake target carries both), include `<segmentlib/segmenter.h>`
+and go.
+
+```cmake
+add_subdirectory(path/to/cpp-segmentlib)   # or FetchContent
+target_link_libraries(your_target PRIVATE segmentlib)
+```
+
+```cpp
+#include <segmentlib/segmenter.h>
+
+auto seg = segmentlib::Segmenter::load("model.mod");
+if (!seg) { /* seg.error().message */ }
+
+auto words = seg->tokenize("日本語の文を分割します。");
+if (!words) { /* words.error().message */ }
+for (auto [start, end] : *words) { /* the word is text[start, end) */ }
+```
+
+The later-standard vocabulary types the code would otherwise use —
+`std::expected` (C++23), `std::span` and `std::endian`/`std::byteswap`
+(C++20) — have minimal stand-ins under `include/segmentlib/support/`, which is
+what keeps the headers reachable from a C++17 project. `Expected<T,E>` behaves
+like `std::expected` for the operations used here: `operator bool`, `operator*`
+/ `operator->`, and `error()`. Consumers on a later standard are unaffected;
+C++17 is a floor, not a ceiling.
+
+The trainer, the CLI and the test suite still require C++23.
 
 ## License
 

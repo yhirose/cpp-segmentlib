@@ -4,13 +4,14 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <span>
 #include <type_traits>
 #include <utility>
 #include <vector>
 
 #include "segmentlib/bytes/binary_reader.h"
 #include "segmentlib/kytea/char_table.h"
+#include "segmentlib/support/attributes.h"
+#include "segmentlib/support/span.h"
 
 namespace segmentlib::kytea {
 
@@ -135,7 +136,7 @@ public:
     // Runs the automaton over `text`, invoking `on_match(end_pos, payload)` for
     // every accepted string, in the order KyTea's Dictionary::match emits them.
     template <class OnMatch>
-    void match(std::span<const CharId> text, OnMatch&& on_match) const {
+    SEGMENTLIB_FLATTEN void match(Span<const CharId> text, OnMatch&& on_match) const {
         if (num_states_ == 0) {
             return;
         }
@@ -167,7 +168,7 @@ public:
     // word), and that must not count as an exact match. The entry is
     // out_flat_'s first output for the state — the state's own entry, since
     // propagated outputs are appended after it (== KyTea's output[0]).
-    [[nodiscard]] const Payload* find_entry(std::span<const CharId> str) const {
+    [[nodiscard]] const Payload* find_entry(Span<const CharId> str) const {
         if (str.empty() || num_states_ == 0) {
             return nullptr;
         }
@@ -185,7 +186,7 @@ public:
     }
 
     // Convenience wrapper that collects all matches into a vector.
-    [[nodiscard]] std::vector<Match> match_all(std::span<const CharId> text) const {
+    [[nodiscard]] std::vector<Match> match_all(Span<const CharId> text) const {
         std::vector<Match> result;
         match(text, [&](std::size_t pos, const Payload& p) {
             result.push_back(Match{pos, &p});

@@ -1,38 +1,31 @@
-add_library(segmentlib STATIC
-    unicode/utf8.cpp
-    unicode/egc.cpp
-    unicode/normalize.cpp
-    kytea/char_table.cpp
-    kytea/model.cpp
-    kytea/scorer.cpp
-    kytea/kytea_backend.cpp
-    mlp/vocab.cpp
-    mlp/dictionary.cpp
-    mlp/precompute.cpp
-    mlp/model.cpp
-    mlp/scorer.cpp
-    mlp/mlp_backend.cpp
-    segmenter.cpp
-    output.cpp
-)
+# Inference is header-only, so there is nothing to compile here and the target
+# only carries include paths and the language requirement.
+add_library(segmentlib INTERFACE)
 
 # PROJECT_SOURCE_DIR, not CMAKE_SOURCE_DIR: the latter is the *top-level*
 # source dir, so under add_subdirectory()/FetchContent it resolves to the
 # consuming project's include/ and segmentlib fails to compile its own sources.
 target_include_directories(segmentlib
-    PUBLIC $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
+    INTERFACE $<BUILD_INTERFACE:${PROJECT_SOURCE_DIR}/include>
 )
 
 # The dictionary matcher's FST comes from cpp-fstlib, vendored under
-# third_party/. PRIVATE because dictionary.h hides it behind a pimpl, so it is
-# not part of our interface; SYSTEM because it is not ours to keep clean under
-# our own warning flags.
+# third_party/. INTERFACE rather than PRIVATE now that mlp/dictionary.h holds
+# the fst::map itself: a consumer including that header compiles it too.
+# SYSTEM because it is not ours to keep clean under our own warning flags.
+#
+# third_party/ is on the path, not third_party/cpp-fstlib/, so the include in
+# dictionary.h reads "cpp-fstlib/fstlib.h". That keeps a consumer's own
+# fstlib.h from shadowing the vendored one, and keeps this directory's other
+# files (README.md, LICENSE) off the include path entirely.
 target_include_directories(segmentlib
-    SYSTEM PRIVATE ${PROJECT_SOURCE_DIR}/third_party/cpp-fstlib
+    SYSTEM INTERFACE ${PROJECT_SOURCE_DIR}/third_party
 )
 
-target_compile_features(segmentlib PUBLIC cxx_std_23)
-target_link_libraries(segmentlib PRIVATE segmentlib_warnings)
+# C++17 is the floor, not the ceiling: consumers may build at any later
+# standard. Keeping inference reachable from a C++17 project is the point of
+# the header-only form.
+target_compile_features(segmentlib INTERFACE cxx_std_17)
 
 if(SEGMENTLIB_BUILD_TRAINING)
     add_library(segmentlib_train STATIC

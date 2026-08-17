@@ -20,27 +20,27 @@ KyTea / Vaporetto と同じ「点推定（pointwise prediction）」方式を採
 ```cpp
 class KyteaBackend {
 public:
-    std::expected<Segments, Error> tokenize(std::string_view text) const;
+    Expected<Segments, Error> tokenize(std::string_view text) const;
 };
 class MlpBackend {
 public:
-    std::expected<Segments, Error> tokenize(std::string_view text) const;
+    Expected<Segments, Error> tokenize(std::string_view text) const;
 };
 
 using AnyBackend = std::variant<kytea::KyteaBackend, mlp::MlpBackend>;
 
 class Segmenter {
 public:
-    static std::expected<Segmenter, Error> load(const std::filesystem::path& model_path);
-    static std::expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
-    static std::expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
 
-    std::expected<Segments, Error> tokenize(std::string_view text) const {
+    Expected<Segments, Error> tokenize(std::string_view text) const {
         return std::visit([&](const auto& b) { return b.tokenize(text); }, backend_);
     }
 
-    std::vector<std::expected<Segments, Error>>
-    tokenize_all(std::span<const std::string_view> texts, unsigned threads = 0) const;
+    std::vector<Expected<Segments, Error>>
+    tokenize_all(Span<const std::string_view> texts, unsigned threads = 0) const;
 
 private:
     AnyBackend backend_;
@@ -119,7 +119,7 @@ KyTea <version> <T|B> <encoding>
 5. **サブワード辞書**：`Dictionary<ProbTagEntry>`（本ライブラリはスキップのみ）
 6. **言語モデル（LM）**：`numTags`個ぶん（本ライブラリはスキップのみ）
 
-本ライブラリは分かち書き専用。上記6セクションのうちWSに必要なのは1（`numTags`/`do_tags`はセクション3・単語辞書エントリ内のタグ情報の**バイト長を知るためだけに**必要）・2・4の一部（`char_length`/`in_dict`のみ）で、3・5・6と単語辞書エントリ内のタグ候補・per-wordタグモデルは**ファイル上のバイト列としては存在するが、値として保持せず読み飛ばす**（`model.cpp`の`skip_*`系関数）。ファイル形式自体はKyTea側が定めた不変の仕様であり、本ライブラリの実装はどこを保持しどこを読み飛ばすかを選ぶだけである。
+本ライブラリは分かち書き専用。上記6セクションのうちWSに必要なのは1（`numTags`/`do_tags`はセクション3・単語辞書エントリ内のタグ情報の**バイト長を知るためだけに**必要）・2・4の一部（`char_length`/`in_dict`のみ）で、3・5・6と単語辞書エントリ内のタグ候補・per-wordタグモデルは**ファイル上のバイト列としては存在するが、値として保持せず読み飛ばす**（`kytea/model.h`の`skip_*`系関数）。ファイル形式自体はKyTea側が定めた不変の仕様であり、本ライブラリの実装はどこを保持しどこを読み飛ばすかを選ぶだけである。
 
 **`KyteaModel`（分類器1個）のシリアライズ**
 
@@ -311,7 +311,7 @@ y = dot(w2, h) + b2      （256次元内積 1 回）
 
 **SIMDカーネル**：`include/segmentlib/mlp/kernels.h`（ヘッダオンリー）にadd/relu/dot×int32/int16の6カーネル＋`add_widen_i16_i32`、およびInt16経路が実際に走らせる融合カーネル`fused_score_i16`（4.8節）。`kernels::scalar::*`が常時コンパイルされるoracle、ディスパッチはコンパイル時（AArch64→NEON、x86は`__AVX2__`定義時のみAVX2、他はscalar）。NEON・AVX2ともbit一致テストで実機検証済み（NEON=ローカルARM実機、AVX2=CI ubuntu-24.04実機＋Windows MSVC実機）。
 
-**thread_localスクラッチ**：`mlp_backend.cpp`内の`Scratch{EncodedEgc,Workspace,scores}`、per-call割当ゼロ。
+**thread_localスクラッチ**：`mlp/mlp_backend.h`の`detail::scratch()`アクセサが持つ`Scratch{EncodedEgc,Workspace,scores}`、per-call割当ゼロ。名前空間スコープではなく関数内に置くのは、ヘッダが多数の翻訳単位にincludeされてもプログラム全体で1つの実体でなければならないため。
 
 トークン化（UTF-8 → EGC分割）はUAX #29に従う。順伝播（推論）のみをライブラリ本体が実装し、学習は別コンポーネント（`SEGMENTLIB_BUILD_TRAINING`オプトイン）で行い、モデルファイル（4.7節）で受け渡す。
 
@@ -504,7 +504,8 @@ word1/tag0a&tag0b/tag1a word2/tag0 word3 ...
 
 - 可変オブジェクトを使い回す副作用ベースのAPIではなく、**入力を受け取り結果を値として返す関数型のAPI**を基本とする。
 - 入力は所有権を必要としないため`std::string_view`を受け取る。
-- エラーは`std::expected`（C++23）で表現する。
+- エラーは`Expected<T,E>`（`support/expected.h`）で表現する。`std::expected`はC++23で、
+  推論がターゲットとするC++17では使えないため、同形の最小実装を自前で持つ。
 - オフセットは**UTF-8バイトオフセット**を採用する。
 - バックエンド（KyTea互換／独自MLP）の違いはこのAPI層には一切露出しない。呼び出し側は`Segmenter::load()`で読み込んだモデルファイルの種類を意識せず、同じ`tokenize()`を呼ぶだけでよい。
 
@@ -535,9 +536,9 @@ struct Error {
 ```cpp
 class Segmenter {
 public:
-    static std::expected<Segmenter, Error> load(const std::filesystem::path& model_path);
-    static std::expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
-    static std::expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
 
     // Move-only: a Segmenter owns its model outright, so an implicit copy
     // would silently duplicate all of it (~400MB for the distributed KyTea
@@ -547,10 +548,10 @@ public:
     Segmenter(Segmenter&&) = default;
     Segmenter& operator=(Segmenter&&) = default;
 
-    std::expected<Segments, Error> tokenize(std::string_view text) const;
+    Expected<Segments, Error> tokenize(std::string_view text) const;
 
-    std::vector<std::expected<Segments, Error>> tokenize_all(
-        std::span<const std::string_view> texts, unsigned threads = 0) const;
+    std::vector<Expected<Segments, Error>> tokenize_all(
+        Span<const std::string_view> texts, unsigned threads = 0) const;
 };
 ```
 
@@ -586,7 +587,7 @@ KyTeaの分かち書き出力形式（スペース区切りの単語列）を踏
 コーパス の 文 で す 。
 ```
 
-**表層語のエスケープ（`showEscapedString`）**：区切り文字（スペース・`/`・`&`・エスケープ文字`\`自身）が単語表層に含まれる場合、`\`で前置してエスケープする（例：入力`Hello World` → `Hello \  World`、`2024/12/31` → `2024 \/ 12 \/ 31`）。実装は`append_full_line`（`src/output.cpp`）に集約し、CLIとgoldenテストで共有。
+**表層語のエスケープ（`showEscapedString`）**：区切り文字（スペース・`/`・`&`・エスケープ文字`\`自身）が単語表層に含まれる場合、`\`で前置してエスケープする（例：入力`Hello World` → `Hello \  World`、`2024/12/31` → `2024 \/ 12 \/ 31`）。実装は`append_full_line`（`include/segmentlib/output.h`）に集約し、CLIとgoldenテストで共有。
 
 **入力の扱い**：入力は常にUTF-8固定。不正なUTF-8バイト列は`CharTable::encode`/`Vocab::encode`が`ErrorCode::InvalidUtf8`を返し、CLIは該当行以前の出力をflushした上で即座に中断する（exit code 1・stderrにメッセージ）。
 
@@ -651,14 +652,16 @@ include/segmentlib/
 │   ├── model.h                  # (L3) モデルのデータ型 + load()
 │   ├── scorer.h                 # (L4) 推論スコア計算
 │   └── mlp_backend.h           # (L5) Backend I/F実装（tokenize）
+├── support/                    # 後発規格の機能をC++17で代替するもの
+│   ├── expected.h              # Expected<T,E> / Unexpected<E>（std::expectedはC++23）
+│   ├── span.h                  # Span<T>（std::spanはC++20）
+│   ├── endian.h                # バイト順とbyteswap（std::endian/byteswapはC++20/23）
+│   └── attributes.h            # SEGMENTLIB_FLATTEN（ヘッダオンリー版ホットパスのインライン化ヒント）
 ├── segmenter.h                 # (L6) 公開API（6節）
 ├── output.h                    # 出力整形（append_full_line）
 └── types.h                     # Segments/Error（6.2節、依存なし）
 
-src/
-├── kytea/{char_table,model,scorer,kytea_backend}.cpp   # automaton.h はヘッダオンリー
-├── unicode/{utf8,egc,normalize}.cpp
-├── mlp/{vocab,dictionary,precompute,model,scorer,mlp_backend}.cpp
+src/                            # 推論はヘッダオンリー。ここでコンパイルされるのは学習とCLIのみ
 ├── mlp/train/                  # 学習コンポーネント（SEGMENTLIB_BUILD_TRAINING時のみビルド）
 │   ├── corpus.{h,cpp}           # KyTeaコーパスパーサ
 │   ├── example.{h,cpp}          # 学習例生成
@@ -670,8 +673,6 @@ src/
 │   ├── exporter.{h,cpp}         # モデルファイル書き出し
 │   ├── compute_backend.h        # BLAS抽象
 │   └── cpu_blas.cpp             # CPU（Accelerate/OpenBLAS）実装
-├── segmenter.cpp
-├── output.cpp
 └── cli/
     ├── main.cpp                  # `predict`/`train` のサブコマンド振り分け
     ├── predict_command.cpp       # predictサブコマンド本体
@@ -680,7 +681,7 @@ src/
 
 ### 8.2 各モジュールの責務
 
-**L1: `bytes::BinaryReader`** — `std::span<const std::byte>`を読み進める薄いカーソル。`read<T>()`、`read_cstring()`を提供する。パースエラーは内部では例外（軽量な`ParseError`）で投げっぱなしにし、`model.h`の`load()`という境界だけで`std::expected`に変換する。
+**L1: `bytes::BinaryReader`** — `Span<const std::byte>`を読み進める薄いカーソル。`read<T>()`、`read_cstring()`を提供する。パースエラーは内部では例外（軽量な`ParseError`）で投げっぱなしにし、`model.h`の`load()`という境界だけで`Expected`に変換する。
 
 **L1: `unicode::utf8`** — UTF-8の1コードポイントをデコードする純粋関数。
 
@@ -688,7 +689,7 @@ src/
 
 **L2: `kytea::Automaton<Payload>`** — `Dictionary<Entry>`のランタイム表現。`std::vector<State>`と`std::vector<Payload>`をフラットに持つ値型（canonical double-array）。モデルファイルのデシリアライズ結果を受け取るだけで、Aho-Corasickを構築するロジックは持たない（ファイルには構築済みオートマトンがそのまま入っているため）。
 
-**L3: `kytea::Model`** — `Config`/`KyteaModel`/`FeatureLookup`に対応するイミュータブルな値型。`static auto load(std::filesystem::path) -> std::expected<Model, Error>`が唯一の構築経路。保持するのは`charDict`/`typeDict`/`dictVector`/`biases`/`multiplier`/`word_dict`（`char_length`/`in_dict`のみ）——分かち書きに必要な最小限。単語辞書のper-wordタグ情報・サブワード辞書・言語モデル・タグモデルは、ファイル上に存在するので読み飛ばして正しく後続位置までシークするが、値としては保持しない。
+**L3: `kytea::Model`** — `Config`/`KyteaModel`/`FeatureLookup`に対応するイミュータブルな値型。`static auto load(std::filesystem::path) -> Expected<Model, Error>`が唯一の構築経路。保持するのは`charDict`/`typeDict`/`dictVector`/`biases`/`multiplier`/`word_dict`（`char_length`/`in_dict`のみ）——分かち書きに必要な最小限。単語辞書のper-wordタグ情報・サブワード辞書・言語モデル・タグモデルは、ファイル上に存在するので読み飛ばして正しく後続位置までシークするが、値としては保持しない。
 
 **L4: `kytea::scorer`** — `calculateWS`のアルゴリズムをそのまま関数として実装する。`Model`・`CharTable`・入力テキストを受け取り、境界ごとのスコア列を返す純粋関数。
 
@@ -744,14 +745,15 @@ cpp-segmentlib/
 **設計判断**
 
 - **ビルドシステムはCMake**。
-- **推論経路の依存は vendoring した1つだけ**：`third_party/cpp-fstlib`（ヘッダオンリー、MIT）。辞書マッチャ（4.4節）が使うFSTで、`dictionary.cpp` がPRIVATEにincludeし `dictionary.h` はpimplで隠すため、公開インタフェースには現れず利用側のincludeパスにも入らない。それ以外は標準ライブラリのみ。学習経路（`SEGMENTLIB_BUILD_TRAINING`）のみBLASをリンクする。
+- **推論経路の依存は vendoring した1つだけ**：`third_party/cpp-fstlib`（ヘッダオンリー、MIT）。辞書マッチャ（4.4節）が使うFSTで、`mlp/dictionary.h` が `fst::map` を直接持ちincludeするため、ヘッダオンリーの推論経路を使う側も一緒にコンパイルすることになり、includeパスに `third_party/` が必要（`segmentlib` CMakeターゲットがSYSTEM interface includeとして持つ）。includeは `"cpp-fstlib/fstlib.h"` と書き、includeパスは `third_party/` にしてある。利用側プロジェクトがこれを隠すには `fstlib.h` というファイル名だけでなくディレクトリ名の一致まで必要になる。それ以外は標準ライブラリのみ。学習経路（`SEGMENTLIB_BUILD_TRAINING`）のみBLASをリンクする。
 - **テストフレームワークは`doctest`**（ヘッダオンリー、CMakeの`FetchContent`で取得）。
 - **`models/`・`corpus/`はgit管理しない**：`.gitignore`に追加し、`scripts/fetch_*.sh`のようなダウンロードスクリプトのみをリポジトリに置く。
 - **`golden/`テストは固定データ方式**：既知の入力文とKyTea実行結果のペアを`tests/golden/fixtures/`に固定データとしてコミットする。モデル未取得時はテストがスキップされる（CI耐性）。
 
 ### 8.4 ビルド／ツールチェーン要件
 
-- **C++23対応コンパイラが必須**：`std::expected`・`std::byteswap`・`std::span`・`std::print`等を使う。
+- **推論はC++17だけで足りる**。ヘッダオンリーであり、本来使いたい後発規格の語彙型（`std::expected`＝C++23、`std::span`・`std::endian`/`std::byteswap`＝C++20）は`include/segmentlib/support/`の最小実装で置き換えてある。C++17のプロジェクトにヘッダを置くだけで使えるのはこのため。`scripts/check_consumer.sh build-consumer 17`がC++17＋`-pedantic-errors`で利用側をビルドしており、公開ヘッダに後発規格の構文が紛れ込んだときに落ちる唯一のビルドがこれ。
+- **学習とCLIはC++23が必要なまま**（`SEGMENTLIB_BUILD_TRAINING`・`SEGMENTLIB_BUILD_CLI`）。テストスイートも同様。C++17を約束するのは推論ヘッダだけ。
 - **macOS**：AppleClang（Xcode標準）でビルド可能。
 - **Linux**：GCC 14以降。
 - **Windows**：MSVC、best-effort。

@@ -12,6 +12,7 @@ unset(CMAKE_POLICY_VERSION_MINIMUM)
 
 add_executable(segmentlib_tests
     unit/test_main.cpp
+    unit/support_test.cpp
     unit/utf8_test.cpp
     unit/egc_test.cpp
     unit/normalize_test.cpp

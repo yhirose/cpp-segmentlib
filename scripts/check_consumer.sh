@@ -9,15 +9,19 @@
 # consumer's `all`) were both found by reading CMake files, with every job
 # green. This is the regression guard for them.
 #
-# Usage: scripts/check_consumer.sh [build-dir]
+# Usage: scripts/check_consumer.sh [build-dir] [std]   (std defaults to 17)
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 BUILD="${1:-${ROOT}/build-consumer}"
+# Inference is header-only and claims C++17; the consumer is what proves it,
+# since every other build here compiles at C++23.
+STD="${2:-17}"
 
 rm -rf "$BUILD"
 # No SEGMENTLIB_* options and no CMAKE_BUILD_TYPE: this is the naive consumer.
-cmake -S "$ROOT/tests/consumer" -B "$BUILD" -DSEGMENTLIB_ROOT="$ROOT"
+cmake -S "$ROOT/tests/consumer" -B "$BUILD" -DSEGMENTLIB_ROOT="$ROOT" \
+      -DSEGMENTLIB_CONSUMER_CXX_STANDARD="$STD"
 # No -G, so this is the default generator (Makefiles), which is serial without
 # --parallel. Every other job configures Ninja and parallelizes for free.
 cmake --build "$BUILD" --parallel
@@ -45,4 +49,4 @@ if grep -qE '^CMAKE_BUILD_TYPE:STRING=.+$' "$BUILD/CMakeCache.txt"; then
 $(grep -E '^CMAKE_BUILD_TYPE:' "$BUILD/CMakeCache.txt")"
 fi
 
-echo "consumer check passed"
+echo "consumer check passed (C++$STD)"

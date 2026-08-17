@@ -20,27 +20,27 @@ The set of backends is a fixed, small, closed set ("KyTea-compatible / custom ML
 ```cpp
 class KyteaBackend {
 public:
-    std::expected<Segments, Error> tokenize(std::string_view text) const;
+    Expected<Segments, Error> tokenize(std::string_view text) const;
 };
 class MlpBackend {
 public:
-    std::expected<Segments, Error> tokenize(std::string_view text) const;
+    Expected<Segments, Error> tokenize(std::string_view text) const;
 };
 
 using AnyBackend = std::variant<kytea::KyteaBackend, mlp::MlpBackend>;
 
 class Segmenter {
 public:
-    static std::expected<Segmenter, Error> load(const std::filesystem::path& model_path);
-    static std::expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
-    static std::expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
 
-    std::expected<Segments, Error> tokenize(std::string_view text) const {
+    Expected<Segments, Error> tokenize(std::string_view text) const {
         return std::visit([&](const auto& b) { return b.tokenize(text); }, backend_);
     }
 
-    std::vector<std::expected<Segments, Error>>
-    tokenize_all(std::span<const std::string_view> texts, unsigned threads = 0) const;
+    std::vector<Expected<Segments, Error>>
+    tokenize_all(Span<const std::string_view> texts, unsigned threads = 0) const;
 
 private:
     AnyBackend backend_;
@@ -119,7 +119,7 @@ Example: `KyTea 0.4.0 B utf8`. `version` is `"0.4.0"` for quantized builds. The 
 5. **Subword dictionary**: `Dictionary<ProbTagEntry>` (this library skips this)
 6. **Language model (LM)**: `numTags` of them (this library skips these)
 
-This library is segmentation-only. Of the six sections above, WS needs section 1 (`numTags`/`do_tags` only to know the **byte length** of section 3's tag models and the word-dictionary entries' tag info), section 2, and part of section 4 (`char_length`/`in_dict` only); sections 3, 5, 6, and the tag candidates/per-word tag models inside word dictionary entries **exist as byte sequences in the file but are skipped rather than retained** (`model.cpp`'s `skip_*` functions). The file format itself is KyTea's own fixed spec; this library's implementation only chooses what to retain versus skip.
+This library is segmentation-only. Of the six sections above, WS needs section 1 (`numTags`/`do_tags` only to know the **byte length** of section 3's tag models and the word-dictionary entries' tag info), section 2, and part of section 4 (`char_length`/`in_dict` only); sections 3, 5, 6, and the tag candidates/per-word tag models inside word dictionary entries **exist as byte sequences in the file but are skipped rather than retained** (`kytea/model.h`'s `skip_*` functions). The file format itself is KyTea's own fixed spec; this library's implementation only chooses what to retain versus skip.
 
 **`KyteaModel` (one classifier) serialization**
 
@@ -311,7 +311,7 @@ boundary ⇔ y > 0
 
 **SIMD kernels**: `include/segmentlib/mlp/kernels.h` (header-only) has 6 add/relu/dot kernels for int32/int16, plus `add_widen_i16_i32` and the fused `fused_score_i16` that the Int16 path actually runs (Section 4.8). `kernels::scalar::*` is the always-compiled oracle; dispatch is compile-time (AArch64→NEON, x86 uses AVX2 only when `__AVX2__` is defined, otherwise scalar). Both NEON and AVX2 are bit-exactness-tested on real hardware (NEON = local ARM hardware, AVX2 = CI ubuntu-24.04 hardware + Windows MSVC hardware).
 
-**thread_local scratch**: `Scratch{EncodedEgc,Workspace,scores}` inside `mlp_backend.cpp`, zero per-call allocation.
+**thread_local scratch**: `Scratch{EncodedEgc,Workspace,scores}` behind the `detail::scratch()` accessor in `mlp/mlp_backend.h`, zero per-call allocation. It sits in a function rather than at namespace scope because the header is included in many translation units and the scratch must be one object program-wide.
 
 Tokenization (UTF-8 → EGC splitting) follows UAX #29. Only the forward pass (inference) is implemented in the library proper; training is a separate component (`SEGMENTLIB_BUILD_TRAINING` opt-in), exchanged via the model file (Section 4.7).
 
@@ -504,7 +504,9 @@ word1/tag0a&tag0b/tag1a word2/tag0 word3 ...
 
 - Rather than a mutable-object-reuse, side-effect-based API, the basic API is **functional: it takes input and returns the result as a value**.
 - Input takes `std::string_view` (no ownership needed, avoiding unnecessary copies).
-- Errors are represented with `std::expected` (C++23).
+- Errors are represented with `Expected<T,E>` (`support/expected.h`), a minimal
+  stand-in for `std::expected`, which is C++23 and out of reach for the C++17
+  baseline inference targets.
 - Offsets use **UTF-8 byte offsets**.
 - Differences among backends (KyTea-compatible / custom MLP) are never exposed at this API layer. Callers don't need to be aware of the type of model file loaded by `Segmenter::load()`; they simply call the same `tokenize()`.
 
@@ -535,9 +537,9 @@ struct Error {
 ```cpp
 class Segmenter {
 public:
-    static std::expected<Segmenter, Error> load(const std::filesystem::path& model_path);
-    static std::expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
-    static std::expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
 
     // Move-only: a Segmenter owns its model outright, so an implicit copy
     // would silently duplicate all of it (~400MB for the distributed KyTea
@@ -547,10 +549,10 @@ public:
     Segmenter(Segmenter&&) = default;
     Segmenter& operator=(Segmenter&&) = default;
 
-    std::expected<Segments, Error> tokenize(std::string_view text) const;
+    Expected<Segments, Error> tokenize(std::string_view text) const;
 
-    std::vector<std::expected<Segments, Error>> tokenize_all(
-        std::span<const std::string_view> texts, unsigned threads = 0) const;
+    std::vector<Expected<Segments, Error>> tokenize_all(
+        Span<const std::string_view> texts, unsigned threads = 0) const;
 };
 ```
 
@@ -586,7 +588,7 @@ Follows KyTea's segmentation output format (a space-separated word list).
 コーパス の 文 で す 。
 ```
 
-**Escaping the surface word (`showEscapedString`)**: when a delimiter character (space, `/`, `&`, or the escape character `\` itself) is included in a word's surface form, it is escaped by prefixing it with `\` (example: input `Hello World` → `Hello \  World`, `2024/12/31` → `2024 \/ 12 \/ 31`). The implementation is consolidated in `append_full_line` (`src/output.cpp`), shared by the CLI and the golden tests.
+**Escaping the surface word (`showEscapedString`)**: when a delimiter character (space, `/`, `&`, or the escape character `\` itself) is included in a word's surface form, it is escaped by prefixing it with `\` (example: input `Hello World` → `Hello \  World`, `2024/12/31` → `2024 \/ 12 \/ 31`). The implementation is consolidated in `append_full_line` (`include/segmentlib/output.h`), shared by the CLI and the golden tests.
 
 **Input handling**: input is always fixed to UTF-8. Malformed UTF-8 bytes cause `CharTable::encode`/`Vocab::encode` to return `ErrorCode::InvalidUtf8`; the CLI flushes any output already produced for earlier lines and then aborts immediately (exit code 1, stderr message).
 
@@ -651,14 +653,16 @@ include/segmentlib/
 │   ├── model.h                  # (L3) model data types + load()
 │   ├── scorer.h                 # (L4) inference score computation
 │   └── mlp_backend.h           # (L5) backend interface implementation (tokenize)
+├── support/                    # C++17 stand-ins for later-standard facilities
+│   ├── expected.h              # Expected<T,E> / Unexpected<E> (std::expected is C++23)
+│   ├── span.h                  # Span<T> (std::span is C++20)
+│   ├── endian.h                # byte order + byteswap (std::endian/byteswap are C++20/23)
+│   └── attributes.h            # SEGMENTLIB_FLATTEN (inlining hint for the header-only hot path)
 ├── segmenter.h                 # (L6) public API (Section 6)
 ├── output.h                    # output formatting (append_full_line)
 └── types.h                     # Segments/Error (Section 6.2, no dependencies)
 
-src/
-├── kytea/{char_table,model,scorer,kytea_backend}.cpp   # automaton.h is header-only
-├── unicode/{utf8,egc,normalize}.cpp
-├── mlp/{vocab,dictionary,precompute,model,scorer,mlp_backend}.cpp
+src/                            # inference is header-only: only training and the CLI compile here
 ├── mlp/train/                  # training components (built only when SEGMENTLIB_BUILD_TRAINING is on)
 │   ├── corpus.{h,cpp}           # KyTea corpus parser
 │   ├── example.{h,cpp}          # training-example generation
@@ -670,8 +674,6 @@ src/
 │   ├── exporter.{h,cpp}         # model-file writing
 │   ├── compute_backend.h        # BLAS abstraction
 │   └── cpu_blas.cpp             # CPU (Accelerate/OpenBLAS) implementation
-├── segmenter.cpp
-├── output.cpp
 └── cli/
     ├── main.cpp                  # dispatches the `predict`/`train` subcommands
     ├── predict_command.cpp       # predict subcommand body
@@ -680,7 +682,7 @@ src/
 
 ### 8.2 Module Responsibilities
 
-**L1: `bytes::BinaryReader`** — a thin cursor advancing over a `std::span<const std::byte>`. Provides `read<T>()`, `read_cstring()`. Parse errors are thrown internally as an exception (a lightweight `ParseError`) and converted to `std::expected` only at the boundary of `model.h`'s `load()`.
+**L1: `bytes::BinaryReader`** — a thin cursor advancing over a `Span<const std::byte>`. Provides `read<T>()`, `read_cstring()`. Parse errors are thrown internally as an exception (a lightweight `ParseError`) and converted to `Expected` only at the boundary of `model.h`'s `load()`.
 
 **L1: `unicode::utf8`** — pure functions decoding a single UTF-8 codepoint.
 
@@ -688,7 +690,7 @@ src/
 
 **L2: `kytea::Automaton<Payload>`** — the runtime representation of `Dictionary<Entry>`. A value type holding `std::vector<State>` and `std::vector<Payload>` flat (canonical double-array). It only receives deserialized model-file data; it holds no logic to build an Aho-Corasick automaton (the file already contains a fully built automaton).
 
-**L3: `kytea::Model`** — an immutable value type corresponding to `Config`/`KyteaModel`/`FeatureLookup`. `static auto load(std::filesystem::path) -> std::expected<Model, Error>` is the sole construction path. It holds `charDict`/`typeDict`/`dictVector`/`biases`/`multiplier`/`word_dict` (only `char_length`/`in_dict`) — the minimum segmentation needs. Per-word tag information in the word dictionary, the subword dictionary, the language model, and the tag models are present in the file, so parsing skips past them to reach the correct subsequent seek position, but are not retained as values.
+**L3: `kytea::Model`** — an immutable value type corresponding to `Config`/`KyteaModel`/`FeatureLookup`. `static auto load(std::filesystem::path) -> Expected<Model, Error>` is the sole construction path. It holds `charDict`/`typeDict`/`dictVector`/`biases`/`multiplier`/`word_dict` (only `char_length`/`in_dict`) — the minimum segmentation needs. Per-word tag information in the word dictionary, the subword dictionary, the language model, and the tag models are present in the file, so parsing skips past them to reach the correct subsequent seek position, but are not retained as values.
 
 **L4: `kytea::scorer`** — implements the `calculateWS` algorithm as a plain function. Takes `Model`, `CharTable`, and input text, and returns a per-boundary score sequence as a pure function.
 
@@ -744,14 +746,15 @@ cpp-segmentlib/
 **Design decisions**
 
 - **The build system is CMake**.
-- **One vendored dependency on the inference path**: `third_party/cpp-fstlib` (header-only, MIT), the FST behind the dictionary matcher (Section 4.4). It is included privately by `dictionary.cpp` — `dictionary.h` hides it behind a pimpl — so it is not part of the public interface and a consumer never sees it in their include path. Everything else is the standard library. Only the training path (`SEGMENTLIB_BUILD_TRAINING`) links BLAS.
+- **One vendored dependency on the inference path**: `third_party/cpp-fstlib` (header-only, MIT), the FST behind the dictionary matcher (Section 4.4). `mlp/dictionary.h` holds the `fst::map` directly and includes it, so a consumer of the header-only inference path compiles it too and needs `third_party/` on their include path (the `segmentlib` CMake target carries it as a SYSTEM interface include). The include is written as `"cpp-fstlib/fstlib.h"` and the include path is `third_party/`, so shadowing it from a consuming project takes a matching directory name rather than just a file called `fstlib.h`. Everything else is the standard library. Only the training path (`SEGMENTLIB_BUILD_TRAINING`) links BLAS.
 - **The test framework is `doctest`** (header-only, fetched via CMake's `FetchContent`).
 - **`models/` and `corpus/` are not git-tracked**: added to `.gitignore`, with only download scripts like `scripts/fetch_*.sh` kept in the repository.
 - **`golden/` tests use fixed data**: pairs of known input sentences and real KyTea execution results are committed as fixed data in `tests/golden/fixtures/`. Tests are skipped when the model is absent (CI-resilient).
 
 ### 8.4 Build/Toolchain Requirements
 
-- **A C++23-capable compiler is required**: uses `std::expected`, `std::byteswap`, `std::span`, `std::print`, etc.
+- **Inference needs only C++17.** It is header-only, and the later-standard vocabulary types it would otherwise want — `std::expected` (C++23), `std::span`, `std::endian`/`std::byteswap` (C++20) — are replaced by minimal equivalents under `include/segmentlib/support/`. This is what lets a C++17 project drop the headers in. `scripts/check_consumer.sh build-consumer 17` builds a consumer at C++17 with `-pedantic-errors`, which is the only build here that fails when a later-standard construct reaches a public header.
+- **Training and the CLI still require C++23** (`SEGMENTLIB_BUILD_TRAINING`, `SEGMENTLIB_BUILD_CLI`), as does the test suite. Only the inference headers carry the C++17 promise.
 - **macOS**: buildable with AppleClang (Xcode's default).
 - **Linux**: GCC 14 or later.
 - **Windows**: MSVC, best-effort.

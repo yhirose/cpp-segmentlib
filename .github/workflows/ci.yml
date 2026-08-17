@@ -134,9 +134,18 @@ jobs:
   # Every other job builds segmentlib as the top-level project, so nothing else
   # here exercises the path a downstream user takes. The rationale and the
   # assertions live in scripts/check_consumer.sh.
+  #
+  # Both standards run: inference is header-only and claims C++17, and the
+  # C++17 round (with -pedantic-errors) is the only thing that fails when a
+  # C++20/23 construct reaches a public header. Every other job compiles at
+  # C++23, where such a construct is simply valid.
   consumer:
-    name: Consumer integration (add_subdirectory)
+    name: Consumer integration (add_subdirectory, C++${{ matrix.std }})
     runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        std: [17, 23]
     steps:
       - uses: actions/checkout@v4
       - name: Install dependencies
@@ -144,7 +153,7 @@ jobs:
           sudo apt-get update
           sudo apt-get install -y g++-14
       - name: Check
-        run: scripts/check_consumer.sh
+        run: scripts/check_consumer.sh build-consumer ${{ matrix.std }}
         env:
           CXX: g++-14
 

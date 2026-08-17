@@ -1,14 +1,19 @@
 #pragma once
 
+#include <algorithm>
+#include <cassert>
 #include <cstddef>
 #include <cstdint>
-#include <expected>
-#include <span>
 #include <string>
 #include <string_view>
 #include <vector>
 
+#include "segmentlib/support/expected.h"
+#include "segmentlib/support/span.h"
 #include "segmentlib/types.h"
+#include "segmentlib/unicode/egc.h"
+#include "segmentlib/unicode/normalize.h"
+#include "segmentlib/unicode/utf8.h"
 
 namespace segmentlib::mlp {
 
@@ -41,8 +46,9 @@ struct EncodedEgc {
     }
 
     // Row ids of cluster i's constituent codepoints.
-    [[nodiscard]] std::span<const std::uint32_t> egc_rows(std::size_t i) const noexcept {
-        return {rows.data() + egc_starts[i], rows.data() + egc_starts[i + 1]};
+    [[nodiscard]] Span<const std::uint32_t> egc_rows(std::size_t i) const noexcept {
+        return Span<const std::uint32_t>(rows.data() + egc_starts[i],
+                                         egc_starts[i + 1] - egc_starts[i]);
     }
 
     // Normalized codepoints of cluster i. Row ids alias distinct codepoints
@@ -66,7 +72,19 @@ public:
     // Takes the model's codepoint array (5.7 field 10): strictly ascending,
     // codepoint i mapping to row i+2. The loader validates the ordering when
     // parsing the model file; this constructor asserts it in debug builds.
-    explicit Vocab(std::vector<char32_t> sorted_codepoints);
+    explicit Vocab(std::vector<char32_t> sorted_codepoints)
+        : codepoints_(std::move(sorted_codepoints)) {
+        assert(std::is_sorted(codepoints_.begin(), codepoints_.end()) &&
+               std::adjacent_find(codepoints_.begin(), codepoints_.end()) ==
+                   codepoints_.end());
+
+        bmp_rows_.assign(kBmpSize, kUnkRow);
+        for (std::size_t i = 0; i < codepoints_.size(); ++i) {
+            if (codepoints_[i] < kBmpSize) {
+                bmp_rows_[codepoints_[i]] = static_cast<std::uint32_t>(i) + 2;
+            }
+        }
+    }
 
     // Embedding row for a codepoint; kUnkRow if it is not in the vocabulary.
     // BMP codepoints (the common case) resolve through a direct-indexed
@@ -83,25 +101,66 @@ public:
     // The ascending codepoint array (5.7 field 10): codepoints()[i]
     // corresponds to embedding row i+2. The model exporter writes this out
     // verbatim.
-    [[nodiscard]] std::span<const char32_t> codepoints() const noexcept {
+    [[nodiscard]] Span<const char32_t> codepoints() const noexcept {
         return codepoints_;
+    }
+
+    // Same as encode(), but fills a caller-owned EncodedEgc (its buffers are
+    // reused, avoiding per-call allocation on the hot path). On error the
+    // contents of `out` are unspecified.
+    [[nodiscard]] Expected<void, Error> encode_into(std::string_view utf8,
+                                                    EncodedEgc& out) const {
+        out.rows.clear();
+        out.cps.clear();
+        out.egc_starts.clear();
+        out.offsets.clear();
+
+        // Normalization is applied per codepoint *before* cluster segmentation
+        // (design.ja.md 4.5 方式(a)), so the breaker sees normalized codepoints;
+        // offsets still index the original bytes (normalization is 1:1 on
+        // codepoints, so cluster spans carry over).
+        unicode::GraphemeBreaker breaker;
+        std::size_t pos = 0;
+        while (pos < utf8.size()) {
+            const auto decoded = unicode::decode(utf8.substr(pos));
+            if (!decoded) {
+                return Unexpected(Error{ErrorCode::InvalidUtf8, "invalid UTF-8 in input"});
+            }
+            const char32_t norm = unicode::normalize(decoded->codepoint);
+            if (breaker.next(norm)) {
+                out.egc_starts.push_back(static_cast<std::uint32_t>(out.rows.size()));
+                out.offsets.push_back(pos);
+            }
+            out.rows.push_back(row_of(norm));
+            out.cps.push_back(norm);
+            pos += decoded->length;
+        }
+        out.egc_starts.push_back(static_cast<std::uint32_t>(out.rows.size()));
+        out.offsets.push_back(utf8.size());
+        return {};
     }
 
     // Encodes UTF-8 input: normalization (unicode::normalize, 方式(a)) →
     // EGC segmentation (unicode::egc) → embedding row ids. Returns
     // InvalidUtf8 on malformed input.
-    [[nodiscard]] std::expected<EncodedEgc, Error> encode(std::string_view utf8) const;
-
-    // Same as encode(), but fills a caller-owned EncodedEgc (its buffers are
-    // reused, avoiding per-call allocation on the hot path). On error the
-    // contents of `out` are unspecified.
-    [[nodiscard]] std::expected<void, Error> encode_into(std::string_view utf8,
-                                                         EncodedEgc& out) const;
+    [[nodiscard]] Expected<EncodedEgc, Error> encode(std::string_view utf8) const {
+        EncodedEgc out;
+        if (auto r = encode_into(utf8, out); !r) {
+            return Unexpected(r.error());
+        }
+        return out;
+    }
 
 private:
     static constexpr char32_t kBmpSize = 0x1'0000;
 
-    [[nodiscard]] std::uint32_t row_of_astral(char32_t cp) const noexcept;
+    [[nodiscard]] std::uint32_t row_of_astral(char32_t cp) const noexcept {
+        const auto it = std::lower_bound(codepoints_.begin(), codepoints_.end(), cp);
+        if (it != codepoints_.end() && *it == cp) {
+            return static_cast<std::uint32_t>(it - codepoints_.begin()) + 2;
+        }
+        return kUnkRow;
+    }
 
     std::vector<char32_t> codepoints_;      // ascending; row i+2 <-> codepoints_[i]
     std::vector<std::uint32_t> bmp_rows_;   // size kBmpSize, direct-indexed

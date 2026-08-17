@@ -1,13 +1,14 @@
 #pragma once
 
-#include <bit>
 #include <cstddef>
 #include <cstdint>
 #include <cstring>
-#include <span>
 #include <stdexcept>
 #include <string>
 #include <type_traits>
+
+#include "segmentlib/support/endian.h"
+#include "segmentlib/support/span.h"
 
 namespace segmentlib::bytes {
 
@@ -28,7 +29,7 @@ public:
 // reader stays correct even on a big-endian host.
 class BinaryReader {
 public:
-    explicit BinaryReader(std::span<const std::byte> data) noexcept : data_(data) {}
+    explicit BinaryReader(Span<const std::byte> data) noexcept : data_(data) {}
 
     [[nodiscard]] std::size_t position() const noexcept { return pos_; }
     [[nodiscard]] std::size_t remaining() const noexcept { return data_.size() - pos_; }
@@ -41,8 +42,8 @@ public:
         static_assert(std::is_trivially_copyable_v<T>);
         T value = read_raw<T>();
         if constexpr (std::is_integral_v<T> && sizeof(T) > 1) {
-            if constexpr (std::endian::native == std::endian::big) {
-                value = std::byteswap(value);
+            if constexpr (kNativeIsBigEndian) {
+                value = byteswap(value);
             }
         }
         return value;
@@ -130,7 +131,7 @@ private:
         return value;
     }
 
-    std::span<const std::byte> data_;
+    Span<const std::byte> data_;
     std::size_t pos_ = 0;
 };
 
