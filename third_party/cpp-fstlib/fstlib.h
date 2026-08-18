@@ -2410,9 +2410,20 @@ public:
                        size_t replace_cost)
       : s_(std::make_shared<const std::u32string>(decode(sv))),
         max_edits_(max_edits), insert_cost_(insert_cost),
-        delete_cost_(delete_cost), replace_cost_(replace_cost) {
-    state_.resize(s_->size() + 1);
-    std::iota(state_.begin(), state_.end(), 0);
+        delete_cost_(delete_cost), replace_cost_(replace_cost),
+        banded_(insert_cost >= 1 && delete_cost >= 1) {
+    state_.init(s_->size() + 1);
+    // Clamped as it is filled, so that a cell the band has not reached yet
+    // already holds cap, the value the recurrence would have left there.
+    // Clamping changes no result on its own -- a cell at or above cap is
+    // indistinguishable once step() clamps, which is also why this is
+    // harmless when !banded_ -- it is what makes "outside the band" and
+    // "equal to cap" the same statement.
+    auto cap = max_edits_ + 1;
+    size_t i = 0;
+    for (auto &cell : state_) {
+      cell = std::min(i++, cap);
+    }
   }
 
   // depth_first_visit copies the automaton once per arc it visits, so this
@@ -2435,29 +2446,67 @@ public:
     u8len_ = 0;
 
     // The DP row is updated in place, left to right: at iteration i,
-    // state_[0..i] already hold their new values and state_[i+1..] still hold
-    // the old ones, with prev_old carrying the old state_[i] that the replace
-    // term needs after that cell was overwritten with its new value. This
-    // avoids allocating a scratch row on every codepoint, which step()
-    // otherwise spends most of its time on. Clamping to max_edits_ + 1 as
-    // values are written (rather than in one pass at the end) yields
-    // identical rows: min(min(u, cap) + insert_cost_, ..., cap) ==
+    // row[..i - 1] already hold their new values and row[i..] still hold the
+    // old ones, with prev_old carrying the old row[i - 1] that the replace
+    // term needs after that cell was overwritten. This avoids
+    // allocating a scratch row on every codepoint, which step() otherwise
+    // spends most of its time on. Clamping to max_edits_ + 1 as values are
+    // written (rather than in one pass at the end) yields identical rows:
+    // min(min(u, cap) + insert_cost_, ..., cap) ==
     // min(u + insert_cost_, ..., cap) for any non-negative cost.
     //
     // The row minimum is accumulated here rather than rescanned in
     // can_match(), which the traversal calls once per arc just like step().
-    const auto &s = *s_;
+    //
+    // row, sp and slen are all hoisted into locals: writing through row is a
+    // size_t store, which the compiler must assume could alias the query
+    // string's own size and data members, so it would otherwise reload them
+    // on every iteration.
+    const auto *sp = s_->data();
+    const auto slen = s_->size();
     const auto cap = max_edits_ + 1;
-    auto prev_old = state_[0];
-    state_[0] = std::min(state_[0] + 1, cap);
-    auto row_min = state_[0];
-    for (size_t i = 0; i < s.size(); i++) {
-      auto cur_old = state_[i + 1];
-      auto cost = (s[i] == cp) ? 0 : replace_cost_;
+    auto *row = state_.data();
+
+    // Only the diagonal band [depth - max_edits_, depth + max_edits_] can
+    // still hold a value below cap: reaching column j after consuming depth
+    // codepoints takes at least |depth - j| inserts or deletes, so once both
+    // of those cost at least 1, every cell outside the band is already
+    // clamped and recomputing it would only write cap over cap. When either
+    // cost can be 0 that bound does not hold, and the band spans the whole
+    // row so that there is a single loop to reason about.
+    size_t lo = 0;
+    auto hi = slen;
+    if (banded_) {
+      depth_++;
+      lo = depth_ > max_edits_ ? depth_ - max_edits_ : 0;
+      hi = std::min(slen, depth_ + max_edits_);
+    }
+
+    // The cell just left of the band supplies the replace term for the band's
+    // first cell, so it is read before being overwritten. At the top of the
+    // row that cell is row[0] and it takes its usual + 1; once the band has
+    // moved it is the cell the band just left behind, retired to cap -- the
+    // loop below reads that cap straight back as its own insert term, and
+    // is_match reads it once the band has moved past the end of the query.
+    // lo advances one step at a time, so every cell the band leaves gets
+    // retired; past the end of the row there is nothing left to retire, and
+    // the loop is empty because hi never exceeds slen.
+    auto first = std::max<size_t>(lo, 1);
+    auto prev_old = cap;
+    auto row_min = cap; // everything outside the band is clamped
+    if (first <= slen + 1) {
+      prev_old = row[first - 1];
+      row[first - 1] = lo == 0 ? std::min(prev_old + 1, cap) : cap;
+      row_min = row[first - 1];
+    }
+
+    for (auto i = first; i <= hi; i++) {
+      auto cur_old = row[i];
+      auto cost = (sp[i - 1] == cp) ? 0 : replace_cost_;
       auto edits = std::min(
-          {state_[i] + insert_cost_, prev_old + cost, cur_old + delete_cost_});
-      state_[i + 1] = std::min(edits, cap);
-      row_min = std::min(row_min, state_[i + 1]);
+          {row[i - 1] + insert_cost_, prev_old + cost, cur_old + delete_cost_});
+      row[i] = std::min(edits, cap);
+      row_min = std::min(row_min, row[i]);
       prev_old = cur_old;
     }
     min_ = row_min;
@@ -2471,15 +2520,65 @@ public:
   bool can_match() const { return min_ <= max_edits_; }
 
 private:
+  // The DP row. depth_first_visit copies the automaton once per arc, so a
+  // std::vector here would mean a malloc/free pair per arc; a query short
+  // enough to fit -- nearly all of them -- keeps its row inline instead.
+  // Longer queries spill to the heap so the class stays general.
+  //
+  // data() is recomputed from n_ rather than cached in a member pointer, so
+  // there is nothing to fix up after a copy and the copy constructor can stay
+  // defaulted. Copying the whole inline array unconditionally measured faster
+  // than copying only the live cells: a fixed-size copy compiles to a straight
+  // move sequence, while a length-dependent one does not.
+  //
+  // There are deliberately no move operations. A defaulted move would take
+  // heap_ out of a spilled row while leaving n_ still claiming it, so data()
+  // would return nullptr; LevenshteinAutomaton's user-declared copy
+  // constructor suppresses its own implicit moves, which is what keeps that
+  // unreachable today.
+  class Row {
+  public:
+    // Sizes the row once, at construction. Cells are not carried across the
+    // inline/heap boundary, so this is not a general resize.
+    void init(size_t n) {
+      n_ = n;
+      if (n > kInline) { heap_.resize(n); }
+    }
+
+    // Callers in a loop should hoist data() rather than indexing repeatedly:
+    // it has to branch on whether the row spilled, and the compiler cannot
+    // prove that stays fixed across writes through the pointer.
+    size_t *data() { return n_ <= kInline ? inline_.data() : heap_.data(); }
+    const size_t *data() const {
+      return n_ <= kInline ? inline_.data() : heap_.data();
+    }
+
+    size_t *begin() { return data(); }
+    size_t *end() { return data() + n_; }
+    size_t back() const { return data()[n_ - 1]; }
+
+  private:
+    // 16 cells hold a query of 15 codepoints, which covers 97% of
+    // /usr/share/dict/words; anything longer falls back to the heap, as it
+    // did before this buffer existed. Value-initialized because the defaulted
+    // copy constructor reads the whole array.
+    static constexpr size_t kInline = 16;
+    size_t n_ = 0;
+    std::array<size_t, kInline> inline_{};
+    std::vector<size_t> heap_; // empty unless n_ > kInline
+  };
+
   std::shared_ptr<const std::u32string> s_;
   size_t max_edits_;
   size_t insert_cost_;
   size_t delete_cost_;
   size_t replace_cost_; // TODO: better cost function is needed?
-  std::vector<size_t> state_;
-  size_t min_ = 0; // smallest cell of state_; the initial row starts at 0
-  char u8buf_[4]{}; // bytes of a not-yet-complete codepoint
+  Row state_;
+  size_t min_ = 0;   // smallest cell of state_; the initial row starts at 0
+  size_t depth_ = 0; // codepoints consumed so far; unused unless banded_
+  char u8buf_[4]{};  // bytes of a not-yet-complete codepoint
   uint8_t u8len_ = 0;
+  bool banded_;
 
   bool decode_codepoint(std::string_view s8, char32_t &cp) const {
     auto l = s8.size();
