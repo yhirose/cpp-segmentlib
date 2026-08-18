@@ -42,6 +42,10 @@ lint:
 consumer:
     scripts/check_consumer.sh
 
+# Update the vendored cpp-fstlib header to upstream HEAD (third_party/cpp-fstlib)
+vendor-update:
+    scripts/vendor_update_fstlib.sh
+
 # Fetch everything training and evaluation need (corpora and the UniDic dictionary)
 setup: corpus dict
 
