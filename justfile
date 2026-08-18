@@ -6,6 +6,10 @@ build_dir := "build"
 bench_dir := "build-release"
 
 model := "models/mlp/ja-ud-gsd.mod"
+# The EDLA model is a research artifact, not a shipped one: it stays in the
+# gitignored corpus directory so it never reaches models/, whose contents the
+# release script versions and the golden fixtures pin.
+ed_model := "corpus/ud-gsd/ed.mod"
 corpus_dir := "corpus/ud-gsd"
 
 # List available recipes
@@ -58,6 +62,16 @@ model: build
         --dict {{corpus_dir}}/dict_unidic.txt \
         --model-out {{model}}
 
+# Train the same network with EDLA instead of backpropagation, on the same
+# corpus, dictionary and hyperparameters as `just model` -- holding all of that
+# fixed is what makes the comparison in `just eval-ed` about the learning rule.
+model-ed *args: build
+    {{build_dir}}/src/cli/segmenter train --backend ed \
+        --corpus {{corpus_dir}}/train.kytea.txt \
+        --dev-corpus {{corpus_dir}}/dev.kytea.txt \
+        --dict {{corpus_dir}}/dict_unidic.txt \
+        --model-out {{ed_model}} {{args}}
+
 # Segment stdin with the reference model, e.g. `echo 日本語の文 | just predict`
 predict *args: build
     @{{build_dir}}/src/cli/segmenter predict --model {{model}} {{args}}
@@ -68,6 +82,16 @@ eval: build
         printf '%-8s ' "$set"; \
         python3 scripts/eval_segmentation.py --gold corpus/$set/test.kytea.txt \
             --command "{{build_dir}}/src/cli/segmenter predict --model {{model}}" \
+            | grep 'P='; \
+    done
+
+# The same numbers for the EDLA model, to compare against `just eval` directly.
+# Needs `just model-ed` first.
+eval-ed: build
+    @for set in ud-gsd ud-pud; do \
+        printf '%-8s ' "$set"; \
+        python3 scripts/eval_segmentation.py --gold corpus/$set/test.kytea.txt \
+            --command "{{build_dir}}/src/cli/segmenter predict --model {{ed_model}}" \
             | grep 'P='; \
     done
 

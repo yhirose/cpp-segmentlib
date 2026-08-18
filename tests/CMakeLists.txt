@@ -25,6 +25,7 @@ add_executable(segmentlib_tests
     unit/model_test.cpp
     unit/mlp_model_test.cpp
     unit/mlp_kernels_test.cpp
+    unit/ed_model_test.cpp
     golden/golden_test.cpp
 )
 
@@ -39,6 +40,8 @@ if(SEGMENTLIB_BUILD_TRAINING)
         unit/train_quantize_test.cpp
         unit/train_exporter_test.cpp
         unit/train_inference_test.cpp
+        unit/train_ed_update_test.cpp
+        unit/train_ed_inference_test.cpp
     )
     target_link_libraries(segmentlib_tests PRIVATE segmentlib_train)
 endif()

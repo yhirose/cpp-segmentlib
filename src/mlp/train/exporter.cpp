@@ -23,7 +23,8 @@ void write_i16_tensor(bytes::BinaryWriter& out,
 
 std::vector<std::byte>
 serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
-                std::span<const std::vector<std::string>> dictionaries) {
+                std::span<const std::vector<std::string>> dictionaries,
+                std::string_view header) {
     const NetConfig& c = quantized.config;
     assert(c.vocab_size == vocab.size());
     assert(c.num_dicts == dictionaries.size());
@@ -37,7 +38,7 @@ serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
     assert(quantized.b1.size() == c.hidden);
 
     bytes::BinaryWriter out;
-    out.write_line("SegmentLibMLP 1");
+    out.write_line(std::string(header));
 
     // Config (fields 1-4b). unicode_version records which Unicode data the
     // EGC splitter used at training time; the loader warns on mismatch.
@@ -86,9 +87,10 @@ serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
 std::expected<void, Error>
 export_model(const std::filesystem::path& path, const QuantizedModel& quantized,
              const Vocab& vocab,
-             std::span<const std::vector<std::string>> dictionaries) {
+             std::span<const std::vector<std::string>> dictionaries,
+             std::string_view header) {
     const std::vector<std::byte> bytes =
-        serialize_model(quantized, vocab, dictionaries);
+        serialize_model(quantized, vocab, dictionaries, header);
     std::ofstream out(path, std::ios::binary | std::ios::trunc);
     if (!out) {
         return std::unexpected(Error{ErrorCode::IoError, "cannot open model file for writing"});

@@ -4,10 +4,11 @@
 
 A C++ **segmentation-only** word-segmentation library using the same "pointwise prediction" approach as KyTea / Vaporetto: an independent binary classification (split / do not split) at each character boundary. Unlike lattice + Viterbi minimum-cost methods (e.g. MeCab), it needs no dictionary cost design or dynamic programming.
 
-The public API is a single one (Section 6), backed internally by two swappable **backends**:
+The public API is a single one (Section 6), backed internally by three swappable **backends**:
 
 - **KyTea-compatible backend** (Section 3) — loads a KyTea-trained model as-is and performs inference with the same feature extraction and linear SVM classifier as KyTea. Inference only; no training support.
 - **Custom MLP backend** (Section 4) — uses a custom-designed MLP (multi-layer perceptron) as the classifier instead of a linear SVM. Also has a self-implemented training engine.
+- **EDLA backend** (Section 11) — the same network as the MLP backend, trained by the Error Diffusion Learning Algorithm instead of backpropagation. A study of whether a biologically motivated local learning rule can train this task, not a separate model design.
 
 **The corpus format is always the KyTea corpus format** (Section 5). Both the KyTea-compatible and custom MLP backends take the same KyTea corpus format (full/partial annotation) as input.
 
@@ -15,7 +16,7 @@ The public API is a single one (Section 6), backed internally by two swappable *
 
 To hide multiple backends behind the same API, `Segmenter` is a thin dispatcher unaware of backend implementation details.
 
-The set of backends is a fixed, small, closed set ("KyTea-compatible / custom MLP"), with no requirement for dynamic external plugins. So instead of an open extension mechanism via virtual functions (`virtual` + heap allocation), this uses **closed polymorphism via `std::variant` + `std::visit`**. This avoids vtable indirection and per-backend heap allocation, and any missing branch for an unsupported backend is caught at compile time.
+The set of backends is a fixed, small, closed set ("KyTea-compatible / custom MLP / EDLA"), with no requirement for dynamic external plugins. So instead of an open extension mechanism via virtual functions (`virtual` + heap allocation), this uses **closed polymorphism via `std::variant` + `std::visit`**. This avoids vtable indirection and per-backend heap allocation, and any missing branch for an unsupported backend is caught at compile time.
 
 ```cpp
 class KyteaBackend {
@@ -26,14 +27,19 @@ class MlpBackend {
 public:
     Expected<Segments, Error> tokenize(std::string_view text) const;
 };
+class EdBackend {
+public:
+    Expected<Segments, Error> tokenize(std::string_view text) const;
+};
 
-using AnyBackend = std::variant<kytea::KyteaBackend, mlp::MlpBackend>;
+using AnyBackend = std::variant<kytea::KyteaBackend, mlp::MlpBackend, ed::EdBackend>;
 
 class Segmenter {
 public:
     static Expected<Segmenter, Error> load(const std::filesystem::path& model_path);
     static Expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
     static Expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_ed(const std::filesystem::path& model_path);
 
     Expected<Segments, Error> tokenize(std::string_view text) const {
         return std::visit([&](const auto& b) { return b.tokenize(text); }, backend_);
@@ -47,9 +53,11 @@ private:
 };
 ```
 
-**Model format auto-detection**: `Segmenter::load()` selects the backend automatically by looking at the file's leading signature (a `"SegmentLibMLP "` header line selects the MLP backend, Section 4.7; anything else falls through to the KyTea backend). `load_kytea(path)` / `load_mlp(path)` are also provided for explicitly specifying the backend; `load()` is a thin wrapper around them.
+**Model format auto-detection**: `Segmenter::load()` selects the backend automatically by looking at the file's leading signature (a `"SegmentLibMLP "` header line selects the MLP backend, Section 4.7, and `"SegmentLibED "` the EDLA one, Section 11; anything else falls through to the KyTea backend). The signatures differ in length, so `load()` reads the longest one it knows and compares each candidate over its own length; a file shorter than that simply matches nothing. `load_kytea(path)` / `load_mlp(path)` / `load_ed(path)` are also provided for explicitly specifying the backend; `load()` is a thin wrapper around them.
 
-Each backend class only needs to satisfy the `tokenize` signature; the internal feature extraction, classifier, and model parser can be implemented completely independently. The only thing the two backends have in common is "returning the same `Segments` type."
+Each backend class only needs to satisfy the `tokenize` signature; the internal feature extraction, classifier, and model parser can be implemented completely independently. The only thing the backends are required to have in common is "returning the same `Segments` type."
+
+The EDLA backend is a deliberate exception to that independence: it shares the MLP backend's model parser and scorer outright rather than reimplementing them (Section 11.2). The two differ only in how their weights were learned, and holding the inference path *identical* is what makes the comparison between them measure the learning rule instead of two separately-tuned implementations.
 
 ## 3. KyTea-Compatible Backend
 
@@ -604,11 +612,13 @@ segmenter train --backend mlp \
   [--epochs 100] [--batch-size 256] [--patience 15] [--lr 1e-3] [--seed 42]
 ```
 
-Only `--backend mlp` is implemented (requires a `SEGMENTLIB_BUILD_TRAINING=ON` build; `train` is a stub in an OFF build). `--backend kytea` / `--backend vaporetto` return an explicit "not implemented" error (`train_command.cpp`).
+`--backend mlp` and `--backend ed` are implemented (both require a `SEGMENTLIB_BUILD_TRAINING=ON` build; `train` is a stub in an OFF build). `--backend kytea` / `--backend vaporetto` return an explicit "not implemented" error (`train_command.cpp`).
+
+Every option below means the same thing for both backends, `--lr` included: the EDLA trainer uses the same Adam optimizer over the same minibatches, and only the rule that produces the update differs (Section 11.3). That is what lets a run of each, with the flags held equal, attribute their difference to the learning rule.
 
 | Option | Description |
 |---|---|
-| `--backend mlp` | the backend to train (required) |
+| `--backend mlp\|ed` | the backend to train (required) |
 | `--corpus <path>` | full-annotation corpus (Section 5.1). Repeatable |
 | `--partial-corpus <path>` | partial-annotation corpus (Section 5.2). Repeatable |
 | `--dict <path>` | dictionary file. Repeatable |
@@ -623,6 +633,7 @@ Only `--backend mlp` is implemented (requires a `SEGMENTLIB_BUILD_TRAINING=ON` b
 | `--patience <int>` | early-stopping patience (default 15) |
 | `--lr <float>` | learning rate (default 1e-3) |
 | `--seed <int>` | random seed (default 42) |
+| `--ed-embedding-update <hybrid\|pure>` | EDLA only: how the embedding is updated (default hybrid, Section 11.3) |
 
 When a KyTea-compatible model needs training, the real `train-kytea` (Homebrew-distributed) is called directly as an external tool (this library's own evaluation pipeline, Section 4.8, is a working example).
 
@@ -653,6 +664,9 @@ include/segmentlib/
 │   ├── model.h                  # (L3) model data types + load()
 │   ├── scorer.h                 # (L4) inference score computation
 │   └── mlp_backend.h           # (L5) backend interface implementation (tokenize)
+├── ed/                         # EDLA: the mlp network trained differently (Section 11)
+│   ├── model.h                  # (L3) "SegmentLibED" signature; body parsed by mlp::Model
+│   └── ed_backend.h            # (L5) backend interface implementation (scores via mlp::tokenize_with)
 ├── support/                    # C++17 stand-ins for later-standard facilities
 │   ├── expected.h              # Expected<T,E> / Unexpected<E> (std::expected is C++23)
 │   ├── span.h                  # Span<T> (std::span is C++20)
@@ -674,10 +688,13 @@ src/                            # inference is header-only: only training and th
 │   ├── exporter.{h,cpp}         # model-file writing
 │   ├── compute_backend.h        # BLAS abstraction
 │   └── cpu_blas.cpp             # CPU (Accelerate/OpenBLAS) implementation
+├── ed/train/                   # EDLA trainer: replaces net.cpp's backward pass, reuses the rest
+│   ├── edla.{h,cpp}             # the local update rule, Dale's law, polarity
+│   └── trainer.{h,cpp}          # training loop (mirrors mlp/train/trainer.cpp)
 └── cli/
     ├── main.cpp                  # dispatches the `predict`/`train` subcommands
     ├── predict_command.cpp       # predict subcommand body
-    └── train_command.cpp         # train subcommand body (only --backend mlp implemented)
+    └── train_command.cpp         # train subcommand body (--backend mlp and ed implemented)
 ```
 
 ### 8.2 Module Responsibilities
@@ -818,3 +835,115 @@ cpp-segmentlib/
 - **Hard constraints on partial-annotation input** (`-wsconst` equivalent): not implemented. The distributed jp model's `wsConstraint` is normally empty and has no effect on the default output.
 - **pmr-based API** (`std::pmr::memory_resource` injection): not implemented. To be considered if it actually becomes a bottleneck in benchmarks.
 - **MLP backend's AVX2**: CI-verified on real hardware (GitHub Actions ubuntu-24.04 hardware + Windows MSVC hardware).
+- **EDLA backend beyond one hidden layer**: not implemented. `PrecomputeTable` assumes the embedding→hidden map is a single linear hop, so a deeper variant needs a new inference kernel as well as a training change (Section 11.3).
+- **A shipped EDLA model**: not provided. `models/` holds release-managed artifacts; the EDLA model is a research output reproduced locally with `just model-ed` (Section 11.5).
+- **A plain-SGD optimizer for the EDLA comparison**: not implemented. Adam normalizes away most of what separates the EDLA update from backpropagation's in this architecture, so the measured parity is weaker evidence than it looks; settling what the rule alone is worth needs an optimizer that does not rescale per parameter (Section 11.6).
+
+## 11. EDLA Backend
+
+### 11.1 What It Is and Why It Is Here
+
+The Error Diffusion Learning Algorithm (EDLA), proposed by Kaneko in 1999 and given a systematic evaluation in [Fujita, arXiv:2504.14814](https://arxiv.org/abs/2504.14814), trains a network without backpropagation. A single global error signal is computed at the output and broadcast unchanged to every layer below; each unit turns that broadcast into a weight change using only locally available quantities — its own pre-activation, the activity arriving at its synapses, and a fixed excitatory/inhibitory tag. No layer reads another layer's weights, and no chain of derivatives is propagated backwards.
+
+This backend trains the Section 4 network with that rule instead of backpropagation. Two things made this task a fair place to try it:
+
+- **The classifier is already binary.** EDLA natively supports one scalar output; the paper's multi-class experiments need K independent networks and about 4K times the parameters of an equivalent MLP. Pointwise boundary prediction is one output by construction, so that cost does not arise.
+- **The network is already shallow.** The paper's central finding is that EDLA is close to backpropagation at one hidden layer and degrades sharply with depth. Section 4.4's network has exactly one hidden layer, so no architectural concession was needed to land in the regime where EDLA is expected to work.
+
+That second point cuts both ways and is stated here rather than buried: **this benchmark sits in the most favourable regime the paper identifies for EDLA.** A small gap here is the expected result, not evidence that the rule generalizes to deeper networks — for which the same paper predicts, and measures, a widening gap.
+
+### 11.2 Relationship to the MLP Backend
+
+The EDLA backend shares the MLP backend's model parser, precompute table and scorer outright (`ed/model.h` wraps `mlp::Model`; `ed::EdBackend::tokenize` calls `mlp::tokenize_with`). It is the one place where Section 2's "backends share nothing but the `Segments` type" is deliberately set aside.
+
+The reason is the experiment itself. The two backends are meant to differ in exactly one variable — the learning rule — so the inference path is held byte-identical rather than reimplemented. A duplicated scorer could drift, and any drift would show up as an accuracy difference indistinguishable from the thing being measured. A unit test pins the property directly: the same weights written behind both signatures segment identically (`ed_model_test.cpp`).
+
+The training side shares just as much: corpus parsing, vocabulary and example generation, batching, the forward pass, Adam, PTQ quantization and the serializer are all the Section 4.9 code, unchanged. Only `Net::backward` is replaced.
+
+### 11.3 The Learning Rule
+
+Write `d = t − sigmoid(y)` for the global error signal of one example. This is the only quantity that leaves the output layer.
+
+**Output layer** (`w2`, `b2`). One linear hop from the loss, so the exact gradient is already local — presynaptic activity times the broadcast signal — and there is nothing for EDLA to approximate. Identical to backpropagation.
+
+**Hidden layer** (`W1`, `W_dict`, `b1`). Each unit `j` carries a fixed polarity `p_j`, `+1` for the first `H/2` units and `−1` for the rest, derived from `H` alone and never stored in the model file. The update is
+
+```
+Da_j = g'(a_j) · p_j · d
+```
+
+where backpropagation would have used `g'(a_j) · w2_j · d`. The substitution is exactly "discard the magnitude of the downstream weight, keep its sign", and it is what removes the backward read of `w2`. The paper's positive/negative error channels are the same expression in another form: splitting `d` into `d+ = max(d,0)` and `d− = max(−d,0)` and giving excitatory units `d+` and inhibitory units `d−` reconstructs `p_j·d`.
+
+For that substitution to stand for the sign of the weight it replaces, `sign(w2_j)` must actually equal `p_j`. So Dale's law is imposed: `w2` is initialized on its polarity's side and clamped back after every optimizer step. Units clamped to exactly zero are counted and reported each epoch (`pinned N/H`), since that is capacity the polarity split has cost.
+
+`sigmoid(y)` rather than the raw logit bounds the broadcast to `[-1,1]`. A single scalar reaches every layer at once with nothing downstream to attenuate it, so an unbounded one would let a single wide-margin example drive the whole network — the activation blow-up the paper reports for deeper EDLA networks.
+
+**Embedding.** The paper's networks take fixed input features, so a *learned* input embedding is outside what EDLA specifies; this is an extension, and the two readings of it are a training flag rather than a silent decision:
+
+- `--ed-embedding-update hybrid` (default): reuse `dX = dA · W1`, the same one-hop map backpropagation uses. The hop crosses no nonlinearity, so it chains no activation derivatives — what EDLA objects to — and it is what makes a row's update depend on which characters were actually in the window.
+- `--ed-embedding-update pure`: diffuse the global signal into the embedding as its own layer, gated by a per-dimension polarity. Faithful to "no backward map anywhere", but the update direction is then identical for every character in the batch. Section 11.6 measures what that costs.
+
+**Optimizer.** Adam, the same one the MLP backend uses, over the same minibatches with the same `--lr`. Using plain SGD (as EDLA papers more often do) would have confounded the comparison with an optimizer change; Adam's per-parameter step is itself computed only from that parameter's own history, so it does not violate the locality property. `Gradients` is reused as the container: its values here are local update directions carrying the sign Adam's subtraction expects, not partial derivatives of the loss.
+
+**Depth.** One hidden layer, fixed. Beyond the paper's stability findings, `PrecomputeTable` (Section 4.6) folds the embedding→hidden map into a per-(row, slot) table on the assumption that it is a single linear hop; a second hidden layer would need a new inference kernel, not just a training change.
+
+### 11.4 Model Format
+
+`"SegmentLibED 1\n"` followed by the Section 4.7 body, unchanged. An EDLA model records the same tensors — the network is the same — so only the header line distinguishes the two, and it exists so that a file states which rule produced it and the loaders refuse each other's models.
+
+The polarity array is derived from `H` and is not stored; the trainer and any loader recompute it from the same function.
+
+Note that the signatures differ in length (`"SegmentLibED "` is 13 bytes, `"SegmentLibMLP "` is 14), which is why `Segmenter::load` reads the longest known signature and compares each candidate over its own length (Section 2).
+
+### 11.5 Training
+
+```sh
+segmenter train --backend ed \
+    --corpus corpus/ud-gsd/train.kytea.txt \
+    --dev-corpus corpus/ud-gsd/dev.kytea.txt \
+    --model-out corpus/ud-gsd/ed.mod
+```
+
+Every Section 7.2 option carries over with the same meaning, `--lr` included. `just model-ed` runs the above on the reference corpus with the reference dictionary. The resulting model is not shipped: `models/` holds release-managed artifacts whose output the golden fixtures pin, so the EDLA model stays a local research artifact.
+
+### 11.6 Evaluation
+
+**Protocol.** Both backends were trained on `corpus/ud-gsd/train.kytea.txt` (UD_Japanese-GSD, release tag r2.18) with `corpus/ud-gsd/dev.kytea.txt` for early stopping, at the identical network size and hyperparameters (`w=5, d=64, H=256, min-count 2, batch 256, lr 1e-3, patience 15`) and no dictionary, over seeds 42-46. Accuracy is boundary F1 from `scripts/eval_segmentation.py` against the same gold files the other backends are measured on. Speeds are Apple M1 Pro; inference is the consumer-shaped build (`build-release`, no training, no tests), training is 10 fixed epochs with early stopping disabled so the two rules are compared per unit of work rather than per run-to-convergence.
+
+**Accuracy** (5-seed mean, standard deviation in parentheses):
+
+| Configuration | GSD test F1 | PUD test F1 | vs MLP (GSD) |
+|---|---|---|---|
+| MLP (backpropagation) | 98.00% (0.047) | 98.56% (0.029) | — |
+| **EDLA, hybrid embedding** | **98.00%** (0.067) | **98.56%** (0.040) | **−0.00pt** |
+| EDLA, pure embedding | 95.73% (0.083) | 96.67% (0.157) | −2.27pt |
+
+**Cost** (no dictionary; the dictionary configuration is in parentheses where it differs):
+
+| | MLP | EDLA |
+|---|---|---|
+| Model size | 642,348 B | 642,347 B |
+| Load time | 129 ms | 129 ms |
+| Inference, 1 thread | 5.72 M chars/sec | 5.79 M chars/sec |
+| Training | 1.00 s/epoch (1.18 with UniDic) | 1.02 s/epoch (1.10 with UniDic) |
+
+Model size, load time and inference speed are the same by construction: the network, the file format and the scoring code are shared, and the one-byte size difference is the signature string (`"SegmentLibED "` is a byte shorter than `"SegmentLibMLP "`). The measured inference figures differ by about 1%, which is run-to-run noise on this machine. Training costs the same because both rules issue the same GEMMs; EDLA's hidden-layer term is marginally cheaper (a sign flip where backpropagation multiplies by `w2`) but that is not where the time goes.
+
+**On the headline number.** At one hidden layer on this task, EDLA is indistinguishable from backpropagation: the difference is smaller than the seed spread of either. That is a stronger result than the source paper's own shallow-network measurement (MNIST, one hidden layer: 97.5% EDLA against 98.2% backpropagation), so it deserves more scrutiny rather than less — and there is a specific reason to discount it.
+
+**The Adam caveat.** Because Dale's law forces `sign(w2_j) = p_j`, EDLA's hidden-layer update and backpropagation's differ by exactly `|w2_j|`:
+
+```
+BP:    Da_j = g'(a_j) · w2_j · d  =  g'(a_j) · p_j · |w2_j| · d
+EDLA:  Da_j = g'(a_j) · p_j · d
+```
+
+`|w2_j|` is constant across everything that feeds unit `j` — its whole row of `W1` and `W_dict`, and `b1[j]`. Adam divides each parameter's step by the running RMS of that parameter's own gradients, and that ratio is invariant to scaling a gradient by a constant. So for a `w2` that changed slowly, Adam would cancel the difference between the two rules almost exactly, and the layers below would receive *the same updates either way*.
+
+The reported parity therefore says "EDLA with Adam matches backpropagation with Adam", which is weaker than "EDLA matches backpropagation". Adam was chosen to keep the optimizer from confounding the comparison (Section 11.3); it turns out to confound it in the opposite direction, by normalizing away most of what distinguishes the two rules in this architecture. What survives the cancellation is the embedding path — `dX = dA · W1` sums over `j`, so the per-unit scalings do not factor out — and the time-variation of `w2` itself. Consistent with the rules not being fully equivalent, models trained from the same seed by the two rules disagree on 532 of 543 GSD test lines: they reach equal-scoring but genuinely different solutions.
+
+**The honest reading**: at this depth, with this optimizer, the credit-assignment rule does not measurably matter on this task. Establishing what EDLA alone is worth needs the same comparison under plain SGD, where the `|w2_j|` scale is not normalized away. That is not implemented (Section 10).
+
+**On the pure-diffusion ablation.** Updating the embedding by diffusion alone costs 2.27pt on GSD and 1.89pt on PUD — the one large effect measured here, and the reason `hybrid` is the default. The cause is structural rather than a tuning failure: under that rule `dv_c` depends only on the batch's error sign and the dimension's polarity, never on which characters were in the window, so every row present in a batch moves the same direction and the table cannot learn to tell characters apart. It is worth stating that this is the part of the design the paper does not specify (its networks take fixed inputs), so the failure is of an extension made here, not of EDLA as published.
+
+**Where this sits relative to the paper.** The result is consistent with Fujita's finding that EDLA is close to backpropagation in shallow networks, and says nothing about the depth regime where the same paper measures the gap widening (4 hidden layers on CIFAR-10: 35.5% against 55.2%). This backend is one hidden layer deep and cannot speak to that.

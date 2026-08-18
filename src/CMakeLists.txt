@@ -38,6 +38,10 @@ if(SEGMENTLIB_BUILD_TRAINING)
         mlp/train/trainer.cpp
         mlp/train/quantize.cpp
         mlp/train/exporter.cpp
+        # The EDLA trainer: a different credit-assignment rule over the same
+        # network, so it reuses everything above except the backward pass.
+        ed/train/edla.cpp
+        ed/train/trainer.cpp
     )
     # Training headers are internal (no public headers);
     # consumers of this target (CLI train, tests) include them as

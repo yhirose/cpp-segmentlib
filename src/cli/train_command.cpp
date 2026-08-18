@@ -28,12 +28,14 @@ int run_train(std::span<const std::string_view> /*args*/) {
 #include <string>
 #include <vector>
 
+#include "ed/train/trainer.h"
 #include "mlp/train/compute_backend.h"
 #include "mlp/train/corpus.h"
 #include "mlp/train/example.h"
 #include "mlp/train/exporter.h"
 #include "mlp/train/quantize.h"
 #include "mlp/train/trainer.h"
+#include "segmentlib/ed/model.h"
 
 namespace segmentlib::cli {
 
@@ -67,6 +69,11 @@ struct Options {
     std::uint32_t patience = kTrainDefaults.patience;
     float lr = kAdamDefaults.lr;
     std::uint64_t seed = kTrainDefaults.seed;
+
+    // EDLA only (--backend ed). Everything above is shared with the MLP
+    // backend on purpose: holding the network and the training budget fixed is
+    // what makes a comparison between the two learning rules mean anything.
+    std::string_view ed_embedding_update;
 
     bool ok = true;
 };
@@ -136,13 +143,24 @@ Options parse(std::span<const std::string_view> args) {
             number(opt.lr);
         } else if (a == "--seed") {
             number(opt.seed);
+        } else if (a == "--ed-embedding-update") {
+            opt.ed_embedding_update = need_value(i);
         } else {
             std::println(stderr, "train: unexpected argument '{}'", a);
             opt.ok = false;
         }
     }
     if (opt.backend.empty()) {
-        std::println(stderr, "train: --backend <kytea|vaporetto|mlp> is required");
+        std::println(stderr, "train: --backend <kytea|vaporetto|mlp|ed> is required");
+        opt.ok = false;
+    }
+    if (!opt.ed_embedding_update.empty() && opt.ed_embedding_update != "hybrid" &&
+        opt.ed_embedding_update != "pure") {
+        std::println(stderr, "train: --ed-embedding-update must be hybrid or pure");
+        opt.ok = false;
+    }
+    if (!opt.ed_embedding_update.empty() && opt.backend != "ed") {
+        std::println(stderr, "train: --ed-embedding-update applies to --backend ed");
         opt.ok = false;
     }
     if (opt.model_out.empty()) {
@@ -166,14 +184,28 @@ Options parse(std::span<const std::string_view> args) {
     return opt;
 }
 
-int run_train_mlp(const Options& opt) {
+// Everything the two trainers share: the corpora, the vocabulary and the
+// examples built from them, and the network shape. Both backends see byte-identical
+// inputs, which is the point -- the learning rule is meant to be the only
+// difference between the models they produce.
+struct Prepared {
+    std::vector<std::vector<std::string>> dictionaries;
+    Vocab vocab;
+    ExampleSet train_set;
+    ExampleSet dev_set;
+    bool have_dev = false;
+    NetConfig config;
+};
+
+// Steps 1-2 of the pipeline. Returns false having already reported why.
+bool prepare(const Options& opt, Prepared& out) {
     // 1. Corpora (full, then partial) and dictionaries.
     std::vector<AnnotatedSentence> sentences;
     for (const std::string_view path : opt.corpora) {
         auto parsed = read_full_corpus(std::filesystem::path(path));
         if (!parsed) {
             std::println(stderr, "train: {}: {}", path, parsed.error().message);
-            return 1;
+            return false;
         }
         sentences.insert(sentences.end(),
                          std::make_move_iterator(parsed->begin()),
@@ -183,27 +215,26 @@ int run_train_mlp(const Options& opt) {
         auto parsed = read_partial_corpus(std::filesystem::path(path));
         if (!parsed) {
             std::println(stderr, "train: {}: {}", path, parsed.error().message);
-            return 1;
+            return false;
         }
         sentences.insert(sentences.end(),
                          std::make_move_iterator(parsed->begin()),
                          std::make_move_iterator(parsed->end()));
     }
-    std::vector<std::vector<std::string>> dictionaries;
     for (const std::string_view path : opt.dicts) {
         auto words = read_dictionary(std::filesystem::path(path));
         if (!words) {
             std::println(stderr, "train: {}: {}", path, words.error().message);
-            return 1;
+            return false;
         }
-        dictionaries.push_back(std::move(*words));
+        out.dictionaries.push_back(std::move(*words));
     }
 
     // 2. Vocabulary and examples.
-    const Vocab vocab = build_vocab(sentences, opt.min_count);
+    out.vocab = build_vocab(sentences, opt.min_count);
     ExampleStats stats;
-    const ExampleSet train_set =
-        build_examples(sentences, vocab, dictionaries,
+    out.train_set =
+        build_examples(sentences, out.vocab, out.dictionaries,
                        static_cast<std::uint8_t>(opt.char_window), &stats);
     std::println(stderr,
                  "train: {} sentences ({} skipped: {} EGC conflicts, {} invalid "
@@ -211,31 +242,65 @@ int run_train_mlp(const Options& opt) {
                  stats.sentences_read,
                  stats.sentences_skipped_conflict + stats.sentences_skipped_invalid,
                  stats.sentences_skipped_conflict, stats.sentences_skipped_invalid,
-                 stats.boundaries_labeled, stats.boundaries_unknown, vocab.size());
-    if (train_set.examples.empty()) {
+                 stats.boundaries_labeled, stats.boundaries_unknown, out.vocab.size());
+    if (out.train_set.examples.empty()) {
         std::println(stderr, "train: no supervised boundaries in the corpora");
-        return 1;
+        return false;
     }
 
-    ExampleSet dev_set;
-    const bool have_dev = !opt.dev_corpus.empty();
-    if (have_dev) {
+    out.have_dev = !opt.dev_corpus.empty();
+    if (out.have_dev) {
         auto parsed = read_full_corpus(std::filesystem::path(opt.dev_corpus));
         if (!parsed) {
             std::println(stderr, "train: {}: {}", opt.dev_corpus, parsed.error().message);
-            return 1;
+            return false;
         }
-        dev_set = build_examples(*parsed, vocab, dictionaries,
-                                 static_cast<std::uint8_t>(opt.char_window), nullptr);
+        out.dev_set = build_examples(*parsed, out.vocab, out.dictionaries,
+                                     static_cast<std::uint8_t>(opt.char_window),
+                                     nullptr);
     }
 
-    // 3. Train.
-    NetConfig config;
-    config.window = static_cast<std::uint8_t>(opt.char_window);
-    config.embed_dim = static_cast<std::uint16_t>(opt.embed_dim);
-    config.hidden = static_cast<std::uint16_t>(opt.hidden);
-    config.vocab_size = vocab.size();
-    config.num_dicts = static_cast<std::uint32_t>(dictionaries.size());
+    out.config.window = static_cast<std::uint8_t>(opt.char_window);
+    out.config.embed_dim = static_cast<std::uint16_t>(opt.embed_dim);
+    out.config.hidden = static_cast<std::uint16_t>(opt.hidden);
+    out.config.vocab_size = out.vocab.size();
+    out.config.num_dicts = static_cast<std::uint32_t>(out.dictionaries.size());
+    return true;
+}
+
+// Steps 4-5: quantize the trained parameters, report how many decisions that
+// cost, and write the model behind `header`.
+int finish(const Options& opt, const Prepared& p, const Parameters& params,
+           ComputeBackend& backend, std::string_view header) {
+    const ExampleSet& calibration = p.have_dev ? p.dev_set : p.train_set;
+    const QuantizedModel quantized = quantize(params, calibration, backend);
+    const FlipCheck flips = check_sign_flips(params, quantized, calibration, backend);
+    std::println(stderr,
+                 "train: quantization flipped {}/{} decisions (max |y| {:.4f})",
+                 flips.flips, flips.examples, flips.max_abs_y_flipped);
+
+    const auto exported = export_model(std::filesystem::path(opt.model_out), quantized,
+                                       p.vocab, p.dictionaries, header);
+    if (!exported) {
+        std::println(stderr, "train: {}: {}", opt.model_out, exported.error().message);
+        return 1;
+    }
+    std::println(stderr, "train: wrote {}", opt.model_out);
+    return 0;
+}
+
+void report_dev(bool have_dev, const EvalMetrics& dev) {
+    if (have_dev) {
+        std::println(stderr, "train: best dev F1 {:.4f} (P {:.4f} R {:.4f})", dev.f1,
+                     dev.precision, dev.recall);
+    }
+}
+
+int run_train_mlp(const Options& opt) {
+    Prepared p;
+    if (!prepare(opt, p)) {
+        return 1;
+    }
 
     TrainOptions options;
     options.epochs = opt.epochs;
@@ -247,32 +312,38 @@ int run_train_mlp(const Options& opt) {
 
     const auto backend = make_cpu_backend();
     const TrainResult result = mlp::train::train(
-        config, train_set, have_dev ? &dev_set : nullptr, options, *backend);
-    if (have_dev) {
-        std::println(stderr, "train: best dev F1 {:.4f} (P {:.4f} R {:.4f})",
-                     result.dev_metrics.f1, result.dev_metrics.precision,
-                     result.dev_metrics.recall);
-    }
+        p.config, p.train_set, p.have_dev ? &p.dev_set : nullptr, options, *backend);
+    report_dev(p.have_dev, result.dev_metrics);
 
-    // 4. Quantize (calibrating on dev when available, 5.5/II.6) and verify.
-    const ExampleSet& calibration = have_dev ? dev_set : train_set;
-    const QuantizedModel quantized =
-        quantize(result.params, calibration, *backend);
-    const FlipCheck flips =
-        check_sign_flips(result.params, quantized, calibration, *backend);
-    std::println(stderr,
-                 "train: quantization flipped {}/{} decisions (max |y| {:.4f})",
-                 flips.flips, flips.examples, flips.max_abs_y_flipped);
+    return finish(opt, p, result.params, *backend, mlp::train::kMlpHeader);
+}
 
-    // 5. Export.
-    const auto exported = export_model(std::filesystem::path(opt.model_out),
-                                       quantized, vocab, dictionaries);
-    if (!exported) {
-        std::println(stderr, "train: {}: {}", opt.model_out, exported.error().message);
+int run_train_ed(const Options& opt) {
+    Prepared p;
+    if (!prepare(opt, p)) {
         return 1;
     }
-    std::println(stderr, "train: wrote {}", opt.model_out);
-    return 0;
+
+    ed::train::TrainOptions options;
+    options.epochs = opt.epochs;
+    options.batch_size = opt.batch_size;
+    options.adam.lr = opt.lr;
+    options.seed = opt.seed;
+    options.patience = opt.patience;
+    options.edla.embedding_update = opt.ed_embedding_update == "pure"
+                                        ? ed::train::EmbeddingUpdate::Pure
+                                        : ed::train::EmbeddingUpdate::Hybrid;
+    options.log = [](std::string_view s) { std::println(stderr, "train: {}", s); };
+
+    const auto backend = make_cpu_backend();
+    const ed::train::TrainResult result = ed::train::train(
+        p.config, p.train_set, p.have_dev ? &p.dev_set : nullptr, options, *backend);
+    report_dev(p.have_dev, result.dev_metrics);
+    std::println(stderr, "train: {}/{} hidden units pinned by the polarity split",
+                 result.pinned_units, p.config.hidden);
+
+    return finish(opt, p, result.params, *backend,
+                  std::string(ed::kModelSignature) + "1");
 }
 
 }  // namespace
@@ -284,6 +355,9 @@ int run_train(std::span<const std::string_view> args) {
     }
     if (opt.backend == "mlp") {
         return run_train_mlp(opt);
+    }
+    if (opt.backend == "ed") {
+        return run_train_ed(opt);
     }
     if (opt.backend == "kytea" || opt.backend == "vaporetto") {
         std::println(stderr, "train: backend '{}' training is not implemented", opt.backend);

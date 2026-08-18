@@ -13,7 +13,7 @@ int usage() {
     std::println(stderr, "");
     std::println(stderr, "commands:");
     std::println(stderr, "  predict   segment text from stdin using a model");
-    std::println(stderr, "  train     train a model (--backend mlp; needs a training-enabled build)");
+    std::println(stderr, "  train     train a model (--backend mlp|ed; needs a training-enabled build)");
     std::println(stderr, "");
     std::println(stderr, "  -h, --help       show this message");
     std::println(stderr, "  -v, --version    show the segmentlib version");
