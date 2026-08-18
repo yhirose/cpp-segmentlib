@@ -1,10 +1,12 @@
 #include "mlp/train/trainer.h"
 
 #include <format>
+#include <optional>
 #include <random>
 #include <utility>
 
 #include "mlp/train/dataset.h"
+#include "mlp/train/sgd.h"
 
 namespace segmentlib::mlp::train {
 
@@ -47,7 +49,16 @@ TrainResult train(const NetConfig& config, const ExampleSet& train_set,
                   const ExampleSet* dev_set, const TrainOptions& options,
                   ComputeBackend& backend) {
     Parameters params = Parameters::init(config, options.seed);
-    Adam adam(config, options.adam);
+    std::optional<Adam> adam;
+    std::optional<Sgd> sgd;
+    if (options.optimizer == Optimizer::Adam) {
+        adam.emplace(config, options.adam);
+    } else {
+        sgd.emplace(options.adam.lr);
+    }
+    const auto step = [&](Parameters& p, const Gradients& g) {
+        adam ? adam->step(p, g) : sgd->step(p, g);
+    };
     Net net(backend);
     Dataset data(train_set, config.embed_dim, options.batch_size);
     std::mt19937 rng(static_cast<std::uint32_t>(options.seed));
@@ -67,7 +78,7 @@ TrainResult train(const NetConfig& config, const ExampleSet& train_set,
             data.fill_batch(i, params.embedding, batch);
             loss_sum += net.forward(params, batch, ws) * batch.size;
             net.backward(params, batch, ws, grads);
-            adam.step(params, grads);
+            step(params, grads);
         }
         const double mean_loss =
             data.num_examples() > 0

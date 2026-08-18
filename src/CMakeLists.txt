@@ -35,6 +35,7 @@ if(SEGMENTLIB_BUILD_TRAINING)
         mlp/train/cpu_blas.cpp
         mlp/train/net.cpp
         mlp/train/adam.cpp
+        mlp/train/sgd.cpp
         mlp/train/trainer.cpp
         mlp/train/quantize.cpp
         mlp/train/exporter.cpp

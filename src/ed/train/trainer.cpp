@@ -1,10 +1,12 @@
 #include "ed/train/trainer.h"
 
 #include <format>
+#include <optional>
 #include <random>
 #include <utility>
 
 #include "mlp/train/dataset.h"
+#include "mlp/train/sgd.h"
 
 namespace segmentlib::ed::train {
 
@@ -12,7 +14,16 @@ TrainResult train(const NetConfig& config, const ExampleSet& train_set,
                   const ExampleSet* dev_set, const TrainOptions& options,
                   mlp::train::ComputeBackend& backend) {
     Parameters params = init_parameters(config, options.seed);
-    mlp::train::Adam adam(config, options.adam);
+    std::optional<mlp::train::Adam> adam;
+    std::optional<mlp::train::Sgd> sgd;
+    if (options.optimizer == Optimizer::Adam) {
+        adam.emplace(config, options.adam);
+    } else {
+        sgd.emplace(options.adam.lr);
+    }
+    const auto step = [&](Parameters& p, const Gradients& g) {
+        adam ? adam->step(p, g) : sgd->step(p, g);
+    };
     mlp::train::Net net(backend);
     Edla edla(backend, options.edla);
     mlp::train::Dataset data(train_set, config.embed_dim, options.batch_size);
@@ -39,7 +50,7 @@ TrainResult train(const NetConfig& config, const ExampleSet& train_set,
             data.fill_batch(i, params.embedding, batch);
             loss_sum += net.forward(params, batch, ws) * batch.size;
             edla.local_update(params, batch, ws, grads);
-            adam.step(params, grads);
+            step(params, grads);
             // Reimpose the polarity the hidden-layer rule assumes: without
             // this, sign(w2[j]) drifts away from polarity(j) and the rule is
             // substituting a sign the network no longer has.

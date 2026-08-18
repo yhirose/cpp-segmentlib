@@ -632,6 +632,7 @@ Every option below means the same thing for both backends, `--lr` included: the 
 | `--batch-size <int>` | batch size (default 256) |
 | `--patience <int>` | early-stopping patience (default 15) |
 | `--lr <float>` | learning rate (default 1e-3) |
+| `--optimizer <adam\|sgd>` | optimizer (default adam; sgd is the scale-preserving control of Section 11.6) |
 | `--seed <int>` | random seed (default 42) |
 | `--ed-embedding-update <hybrid\|pure>` | EDLA only: how the embedding is updated (default hybrid, Section 11.3) |
 
@@ -837,7 +838,6 @@ cpp-segmentlib/
 - **MLP backend's AVX2**: CI-verified on real hardware (GitHub Actions ubuntu-24.04 hardware + Windows MSVC hardware).
 - **EDLA backend beyond one hidden layer**: not implemented. `PrecomputeTable` assumes the embedding→hidden map is a single linear hop, so a deeper variant needs a new inference kernel as well as a training change (Section 11.3).
 - **A shipped EDLA model**: not provided. `models/` holds release-managed artifacts; the EDLA model is a research output reproduced locally with `just model-ed` (Section 11.5).
-- **A plain-SGD optimizer for the EDLA comparison**: not implemented. Adam normalizes away most of what separates the EDLA update from backpropagation's in this architecture, so the measured parity is weaker evidence than it looks; settling what the rule alone is worth needs an optimizer that does not rescale per parameter (Section 11.6).
 
 ## 11. EDLA Backend
 
@@ -883,7 +883,7 @@ For that substitution to stand for the sign of the weight it replaces, `sign(w2_
 - `--ed-embedding-update hybrid` (default): reuse `dX = dA · W1`, the same one-hop map backpropagation uses. The hop crosses no nonlinearity, so it chains no activation derivatives — what EDLA objects to — and it is what makes a row's update depend on which characters were actually in the window.
 - `--ed-embedding-update pure`: diffuse the global signal into the embedding as its own layer, gated by a per-dimension polarity. Faithful to "no backward map anywhere", but the update direction is then identical for every character in the batch. Section 11.6 measures what that costs.
 
-**Optimizer.** Adam, the same one the MLP backend uses, over the same minibatches with the same `--lr`. Using plain SGD (as EDLA papers more often do) would have confounded the comparison with an optimizer change; Adam's per-parameter step is itself computed only from that parameter's own history, so it does not violate the locality property. `Gradients` is reused as the container: its values here are local update directions carrying the sign Adam's subtraction expects, not partial derivatives of the loss.
+**Optimizer.** Adam by default, the same one the MLP backend uses, over the same minibatches with the same `--lr`; Adam's per-parameter step is computed only from that parameter's own history, so it does not violate the locality property. `--optimizer sgd` selects plain SGD instead — it exists because Adam turns out to *hide* the difference between the rules rather than merely not confound it, which Section 11.6 measures. `Gradients` is reused as the container: its values here are local update directions carrying the sign the optimizer's subtraction expects, not partial derivatives of the loss.
 
 **Depth.** One hidden layer, fixed. Beyond the paper's stability findings, `PrecomputeTable` (Section 4.6) folds the embedding→hidden map into a per-(row, slot) table on the assumption that it is a single linear hop; a second hidden layer would need a new inference kernel, not just a training change.
 
@@ -942,7 +942,20 @@ EDLA:  Da_j = g'(a_j) · p_j · d
 
 The reported parity therefore says "EDLA with Adam matches backpropagation with Adam", which is weaker than "EDLA matches backpropagation". Adam was chosen to keep the optimizer from confounding the comparison (Section 11.3); it turns out to confound it in the opposite direction, by normalizing away most of what distinguishes the two rules in this architecture. What survives the cancellation is the embedding path — `dX = dA · W1` sums over `j`, so the per-unit scalings do not factor out — and the time-variation of `w2` itself. Consistent with the rules not being fully equivalent, models trained from the same seed by the two rules disagree on 532 of 543 GSD test lines: they reach equal-scoring but genuinely different solutions.
 
-**The honest reading**: at this depth, with this optimizer, the credit-assignment rule does not measurably matter on this task. Establishing what EDLA alone is worth needs the same comparison under plain SGD, where the `|w2_j|` scale is not normalized away. That is not implemented (Section 10).
+**The plain-SGD control (measured).** The control the caveat calls for was run: `--optimizer sgd` (no momentum, no decay — nothing else smoothing the comparison), learning rate swept per backend on dev (seed 42), then 5 seeds at each backend's own best.
+
+The sweep itself is the first place the rules separate. Backpropagation keeps improving up to lr = 5.0 (dev 0.9815) and only degrades at 10. EDLA peaks at lr = 1.0 (dev 0.9791), decays past 1.5, and collapses outright at 3.0 (dev 0.7502) — a roughly five-times-narrower stable range, which is what losing both the `|w2_j|` scaling and Adam's normalization predicts, and matches the paper's observation that EDLA needs smaller learning rates under ReLU.
+
+At each backend's own best rate (5 seeds):
+
+| Configuration | GSD test F1 | PUD test F1 | vs BP (GSD) |
+|---|---|---|---|
+| MLP + SGD, lr 5.0 | 98.27% (0.111) | 98.75% (0.063) | — |
+| EDLA + SGD, lr 1.0 | 98.11% (0.036) | 98.67% (0.023) | −0.16pt |
+
+So once the optimizer stops normalizing gradient scale, EDLA trails backpropagation by 0.09–0.16pt — small, consistent across seeds (the gap exceeds either configuration's seed spread), and in the direction and rough size the shallow-network literature predicts (smaller than the paper's 0.7pt MNIST gap at the same depth). This, not the Adam tie, is the honest measure of the rule at one hidden layer: **the credit-assignment rule costs about 0.1–0.2pt here, and Adam had been hiding it.** Two secondary observations: EDLA's seed variance is about a third of backpropagation's, and it early-stops sooner (20–30 epochs against 36–76) — at its narrower best rate it reaches its plateau faster and lower.
+
+Incidentally, both backends score higher under tuned SGD than under the Adam defaults (98.27/98.11 against 98.00 for both) — an observation about this task's optimizer landscape rather than about the rules, recorded here because Section 4.8's reference numbers are Adam-based and this suggests headroom worth a properly-protocoled sweep of its own.
 
 **On the pure-diffusion ablation.** Updating the embedding by diffusion alone costs 2.27pt on GSD and 1.89pt on PUD — the one large effect measured here, and the reason `hybrid` is the default. The cause is structural rather than a tuning failure: under that rule `dv_c` depends only on the batch's error sign and the dimension's polarity, never on which characters were in the window, so every row present in a batch moves the same direction and the table cannot learn to tell characters apart. It is worth stating that this is the part of the design the paper does not specify (its networks take fixed inputs), so the failure is of an extension made here, not of EDLA as published.
 

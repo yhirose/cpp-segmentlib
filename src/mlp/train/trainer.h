@@ -15,10 +15,18 @@
 
 namespace segmentlib::mlp::train {
 
+// Which optimizer consumes the per-batch update. Adam is the production
+// choice; Sgd exists as the control that preserves gradient scale, which the
+// EDLA comparison needs (sgd.h explains why).
+enum class Optimizer : std::uint8_t { Adam, Sgd };
+
 struct TrainOptions {
     std::uint32_t epochs = 100;
     std::uint32_t batch_size = 256;
+    // adam.lr doubles as plain SGD's learning rate when optimizer is Sgd
+    // (the CLI's --lr feeds both; only one is ever in use).
     AdamConfig adam{};
+    Optimizer optimizer = Optimizer::Adam;
     std::uint64_t seed = 42;
     // Stop after this many epochs without a dev-F1 improvement (0 disables
     // early stopping; ignored when no dev set is given). Dev F1 keeps creeping

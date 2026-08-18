@@ -69,6 +69,7 @@ struct Options {
     std::uint32_t patience = kTrainDefaults.patience;
     float lr = kAdamDefaults.lr;
     std::uint64_t seed = kTrainDefaults.seed;
+    std::string_view optimizer = "adam";  // or "sgd" (the scale-preserving control)
 
     // EDLA only (--backend ed). Everything above is shared with the MLP
     // backend on purpose: holding the network and the training budget fixed is
@@ -143,6 +144,8 @@ Options parse(std::span<const std::string_view> args) {
             number(opt.lr);
         } else if (a == "--seed") {
             number(opt.seed);
+        } else if (a == "--optimizer") {
+            opt.optimizer = need_value(i);
         } else if (a == "--ed-embedding-update") {
             opt.ed_embedding_update = need_value(i);
         } else {
@@ -152,6 +155,10 @@ Options parse(std::span<const std::string_view> args) {
     }
     if (opt.backend.empty()) {
         std::println(stderr, "train: --backend <kytea|vaporetto|mlp|ed> is required");
+        opt.ok = false;
+    }
+    if (opt.optimizer != "adam" && opt.optimizer != "sgd") {
+        std::println(stderr, "train: --optimizer must be adam or sgd");
         opt.ok = false;
     }
     if (!opt.ed_embedding_update.empty() && opt.ed_embedding_update != "hybrid" &&
@@ -306,6 +313,8 @@ int run_train_mlp(const Options& opt) {
     options.epochs = opt.epochs;
     options.batch_size = opt.batch_size;
     options.adam.lr = opt.lr;
+    options.optimizer =
+        opt.optimizer == "sgd" ? Optimizer::Sgd : Optimizer::Adam;
     options.seed = opt.seed;
     options.patience = opt.patience;
     options.log = [](std::string_view s) { std::println(stderr, "train: {}", s); };
@@ -328,6 +337,8 @@ int run_train_ed(const Options& opt) {
     options.epochs = opt.epochs;
     options.batch_size = opt.batch_size;
     options.adam.lr = opt.lr;
+    options.optimizer =
+        opt.optimizer == "sgd" ? Optimizer::Sgd : Optimizer::Adam;
     options.seed = opt.seed;
     options.patience = opt.patience;
     options.edla.embedding_update = opt.ed_embedding_update == "pure"

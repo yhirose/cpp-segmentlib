@@ -42,6 +42,7 @@ if(SEGMENTLIB_BUILD_TRAINING)
         unit/train_inference_test.cpp
         unit/train_ed_update_test.cpp
         unit/train_ed_inference_test.cpp
+        unit/train_sgd_test.cpp
     )
     target_link_libraries(segmentlib_tests PRIVATE segmentlib_train)
 endif()

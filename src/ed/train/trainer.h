@@ -19,11 +19,14 @@ namespace segmentlib::ed::train {
 using mlp::train::AdamConfig;
 using mlp::train::EvalMetrics;
 using mlp::train::ExampleSet;
+using mlp::train::Optimizer;
 
 struct TrainOptions {
     std::uint32_t epochs = 100;
     std::uint32_t batch_size = 256;
+    // adam.lr doubles as plain SGD's learning rate, as in mlp::train.
     AdamConfig adam{};
+    Optimizer optimizer = Optimizer::Adam;
     EdlaConfig edla{};
     std::uint64_t seed = 42;
     // Stop after this many epochs without a dev-F1 improvement (0 disables it;
