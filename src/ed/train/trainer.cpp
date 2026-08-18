@@ -1,8 +1,10 @@
 #include "ed/train/trainer.h"
 
+#include <cmath>
 #include <format>
 #include <optional>
 #include <random>
+#include <string>
 #include <utility>
 
 #include "mlp/train/dataset.h"
@@ -25,7 +27,8 @@ TrainResult train(const NetConfig& config, const ExampleSet& train_set,
         adam ? adam->step(p, g) : sgd->step(p, g);
     };
     mlp::train::Net net(backend);
-    Edla edla(backend, options.edla);
+    Edla edla(backend, options.edla, config);
+    std::vector<float> w2_before;
     mlp::train::Dataset data(train_set, config.embed_dim, options.batch_size);
     std::mt19937 rng(static_cast<std::uint32_t>(options.seed));
 
@@ -50,11 +53,15 @@ TrainResult train(const NetConfig& config, const ExampleSet& train_set,
             data.fill_batch(i, params.embedding, batch);
             loss_sum += net.forward(params, batch, ws) * batch.size;
             edla.local_update(params, batch, ws, grads);
+            if (options.edla.learn_feedback) {
+                w2_before = params.w2;
+            }
             step(params, grads);
             // Reimpose the polarity the hidden-layer rule assumes: without
             // this, sign(w2[j]) drifts away from polarity(j) and the rule is
             // substituting a sign the network no longer has.
             project_dale(params);
+            edla.track_feedback(params, w2_before);
         }
         const double mean_loss =
             data.num_examples() > 0
@@ -66,11 +73,25 @@ TrainResult train(const NetConfig& config, const ExampleSet& train_set,
         if (dev_set != nullptr) {
             const EvalMetrics dev = mlp::train::evaluate(params, *dev_set, backend);
             if (options.log) {
+                // Under Kolen-Pollack, report how far the feedback has
+                // converged on w2 -- that ratio is the whole claim of the
+                // method, so it is measured rather than assumed.
+                std::string feedback_note;
+                if (options.edla.learn_feedback) {
+                    double num = 0.0, den = 0.0;
+                    for (std::size_t j = 0; j < params.w2.size(); ++j) {
+                        const double diff = edla.feedback()[j] - params.w2[j];
+                        num += diff * diff;
+                        den += static_cast<double>(params.w2[j]) * params.w2[j];
+                    }
+                    feedback_note = std::format(
+                        "  |b-w2|/|w2| {:.3f}", den > 0 ? std::sqrt(num / den) : 0.0);
+                }
                 options.log(std::format(
                     "epoch {:3}  loss {:.6f}  dev P {:.4f} R {:.4f} F1 {:.4f}  "
-                    "pinned {}/{}",
+                    "pinned {}/{}{}",
                     epoch + 1, mean_loss, dev.precision, dev.recall, dev.f1,
-                    count_pinned(params), config.hidden));
+                    count_pinned(params), config.hidden, feedback_note));
             }
             if (dev.f1 > best_f1) {
                 best_f1 = dev.f1;

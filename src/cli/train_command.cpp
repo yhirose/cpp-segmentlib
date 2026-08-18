@@ -50,6 +50,7 @@ using mlp::Vocab;
 // compile and silently give the CLI different behaviour from the library.
 const TrainOptions kTrainDefaults;
 const AdamConfig kAdamDefaults;
+const ed::train::EdlaConfig kEdlaDefaults;
 
 struct Options {
     std::string_view backend;
@@ -75,6 +76,9 @@ struct Options {
     // backend on purpose: holding the network and the training budget fixed is
     // what makes a comparison between the two learning rules mean anything.
     std::string_view ed_embedding_update;
+    bool ed_learn_feedback = false;
+    float ed_feedback_decay = kEdlaDefaults.feedback_decay;
+    float ed_feedback_init = kEdlaDefaults.feedback_init;
 
     bool ok = true;
 };
@@ -148,6 +152,12 @@ Options parse(std::span<const std::string_view> args) {
             opt.optimizer = need_value(i);
         } else if (a == "--ed-embedding-update") {
             opt.ed_embedding_update = need_value(i);
+        } else if (a == "--ed-learn-feedback") {
+            opt.ed_learn_feedback = true;
+        } else if (a == "--ed-feedback-decay") {
+            number(opt.ed_feedback_decay);
+        } else if (a == "--ed-feedback-init") {
+            number(opt.ed_feedback_init);
         } else {
             std::println(stderr, "train: unexpected argument '{}'", a);
             opt.ok = false;
@@ -168,6 +178,16 @@ Options parse(std::span<const std::string_view> args) {
     }
     if (!opt.ed_embedding_update.empty() && opt.backend != "ed") {
         std::println(stderr, "train: --ed-embedding-update applies to --backend ed");
+        opt.ok = false;
+    }
+    if (opt.ed_learn_feedback && opt.backend != "ed") {
+        std::println(stderr, "train: --ed-learn-feedback applies to --backend ed");
+        opt.ok = false;
+    }
+    if (opt.ed_learn_feedback &&
+        !(opt.ed_feedback_decay > 0.0f && opt.ed_feedback_decay < 1.0f)) {
+        // Zero never converges the feedback; one wipes both weights each step.
+        std::println(stderr, "train: --ed-feedback-decay must be in (0, 1)");
         opt.ok = false;
     }
     if (opt.model_out.empty()) {
@@ -344,6 +364,9 @@ int run_train_ed(const Options& opt) {
     options.edla.embedding_update = opt.ed_embedding_update == "pure"
                                         ? ed::train::EmbeddingUpdate::Pure
                                         : ed::train::EmbeddingUpdate::Hybrid;
+    options.edla.learn_feedback = opt.ed_learn_feedback;
+    options.edla.feedback_decay = opt.ed_feedback_decay;
+    options.edla.feedback_init = opt.ed_feedback_init;
     options.log = [](std::string_view s) { std::println(stderr, "train: {}", s); };
 
     const auto backend = make_cpu_backend();

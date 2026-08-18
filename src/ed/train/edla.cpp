@@ -38,6 +38,23 @@ std::size_t count_pinned(const Parameters& params) {
     return pinned;
 }
 
+void Edla::track_feedback(Parameters& params, const std::vector<float>& w2_before) {
+    if (!config_.learn_feedback) {
+        return;
+    }
+    // Kolen-Pollack: the forward and feedback weights receive the same delta
+    // and the same decay, each shrinking only its own value. Their difference
+    // is then multiplied by (1 - decay) every step, so the feedback converges
+    // on the forward weight geometrically while never reading it -- which is
+    // the whole point, since reading it is the weight transport that
+    // backpropagation is criticized for.
+    const float keep = 1.0f - config_.feedback_decay;
+    for (std::size_t j = 0; j < feedback_.size(); ++j) {
+        feedback_[j] = (feedback_[j] + (params.w2[j] - w2_before[j])) * keep;
+        params.w2[j] *= keep;
+    }
+}
+
 void Edla::local_update(const Parameters& params, const Batch& batch, Workspace& ws,
                         Gradients& grads) const {
     const std::size_t b_count = batch.size;
@@ -97,11 +114,15 @@ void Edla::local_update(const Parameters& params, const Batch& batch, Workspace&
     // d- - d+ for p_j = -1, which is what the two channels reconstruct.
     // project_dale keeps sign(w2[j]) == p_j, so the substitution stands in for
     // the sign of the weight it replaces and only its magnitude is discarded.
+    //
+    // Under Kolen-Pollack the same expression reads feedback_[j] instead, which
+    // starts at that same p_j and converges on w2[j] -- recovering the discarded
+    // magnitude without the backward read, since the feedback is learned from
+    // its own updates rather than copied.
     ws.da.resize(b_count * h);
     for (std::size_t b = 0; b < b_count; ++b) {
         for (std::size_t j = 0; j < h; ++j) {
-            ws.da[b * h + j] = ws.dy[b] * polarity(j, params.config.hidden) *
-                               config_.diffusion;
+            ws.da[b * h + j] = ws.dy[b] * feedback_[j] * config_.diffusion;
         }
     }
     backend_->relu_backward(ws.a.data(), ws.da.data(), b_count * h);

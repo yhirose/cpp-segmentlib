@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <vector>
 
 #include "mlp/train/compute_backend.h"
 #include "mlp/train/dataset.h"
@@ -53,6 +54,26 @@ struct EdlaConfig {
     // here redundant, so it stays 1; the term is explicit for the deeper
     // variants the paper studies, where the decay per hop is the whole point.
     float diffusion = 1.0f;
+
+    // Kolen-Pollack (Akrout et al. 2019, arXiv:1904.05391): learn the feedback
+    // magnitude instead of pinning it at the polarity's +-1. The measured cost
+    // of pinning it is 0.16pt under plain SGD (design.md 11.6) -- that is the
+    // discarded |w2_j|, and this recovers it without reading w2: the forward
+    // and feedback weights take the same update and the same decay, each using
+    // only its own value, so their difference decays geometrically.
+    bool learn_feedback = false;
+    // The shared decay that drives that convergence. Must be > 0 for the
+    // feedback to converge at all; too large and it also shrinks w2 itself,
+    // since both weights decay by construction.
+    float feedback_decay = 0.01f;
+    // Magnitude the feedback starts at, before it converges on w2's. The
+    // default 1 is what fixed-polarity EDLA uses forever, which makes the
+    // ablation exact -- but w2 is initialized near 1/sqrt(H) (~0.06 at H=256),
+    // so the first updates are then an order of magnitude larger than
+    // backpropagation's, and that transient is what limits the usable learning
+    // rate. Setting this to that scale is not weight transport: it is the
+    // initializer's public constant, not any trained weight's value.
+    float feedback_init = 1.0f;
 };
 
 // The fixed excitatory (+1) / inhibitory (-1) tag of hidden unit j: the first
@@ -82,20 +103,41 @@ void project_dale(Parameters& params);
 
 class Edla {
 public:
-    Edla(ComputeBackend& backend, const EdlaConfig& config) noexcept
-        : backend_(&backend), config_(config) {}
+    Edla(ComputeBackend& backend, const EdlaConfig& config, const NetConfig& net)
+        : backend_(&backend), config_(config), feedback_(net.hidden) {
+        // The feedback starts where fixed-polarity EDLA leaves it forever, so
+        // learn_feedback = false is exactly this rule with the learning turned
+        // off, and the ablation compares like with like.
+        for (std::size_t j = 0; j < feedback_.size(); ++j) {
+            feedback_[j] = polarity(j, net.hidden) * config.feedback_init;
+        }
+    }
 
     // The EDLA counterpart of Net::backward: fills `grads` with one update
     // step, given a preceding Net::forward on the same batch. Overwrites
-    // `grads` exactly as Net::backward does, so Adam::step consumes it
+    // `grads` exactly as Net::backward does, so the optimizer consumes it
     // unchanged -- the values are local update directions carrying the sign
-    // Adam's subtraction expects, not partial derivatives of the loss.
+    // its subtraction expects, not partial derivatives of the loss.
     void local_update(const Parameters& params, const Batch& batch, Workspace& ws,
                       Gradients& grads) const;
+
+    // The Kolen-Pollack step, run after the optimizer has moved w2 (and after
+    // the Dale projection, so the feedback tracks the weight that actually
+    // resulted). `w2_before` is w2 as it stood before that move. No-op unless
+    // learn_feedback is set.
+    void track_feedback(Parameters& params, const std::vector<float>& w2_before);
+
+    // The per-unit feedback the hidden layer is currently using: +-1 under
+    // fixed polarity, converging on w2 under Kolen-Pollack. The trainer reports
+    // how far it has converged.
+    [[nodiscard]] const std::vector<float>& feedback() const noexcept {
+        return feedback_;
+    }
 
 private:
     ComputeBackend* backend_;
     EdlaConfig config_;
+    std::vector<float> feedback_;
 };
 
 }  // namespace segmentlib::ed::train

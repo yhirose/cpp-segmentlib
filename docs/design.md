@@ -387,6 +387,18 @@ Comparisons retrain KyTea and Vaporetto on an obtainable corpus (UD_Japanese-GSD
 
 No dictionary, default configuration (w=5, d=64, H=256, patience=15, seed=42). Zero quantization-induced decision flips across dev+train, 290,024 boundaries, on the real UD-GSD model. Seed-induced F1 variation is about ±0.05pt (measured over 5 seeds). **Without a dictionary the MLP trails the linear models (KyTea/Vaporetto) by ~0.7–0.9pt**; KyTea and Vaporetto are roughly tied.
 
+**An optimizer lever is open, measured but not adopted.** Section 11.6's plain-SGD control (added for the EDLA comparison) turned out to beat Adam on this task once its learning rate is tuned. In the shipped UniDic configuration, over 5 seeds:
+
+| Optimizer | GSD test F1 | PUD test F1 |
+|---|---|---|
+| Adam, lr 1e-3 (the default) | 99.13% (0.038) | 99.30% (0.019) |
+| Adam, lr 3e-3 (dev-selected) | 99.12% (0.068) | 99.31% (0.035) |
+| **SGD, lr 5.0 (dev-selected)** | **99.31%** (0.034) | **99.46%** (0.022) |
+
+Adam's own learning rate was swept the same way before drawing that conclusion, since sweeping only one side is exactly the mistake this project's comparisons are meant to avoid — and the check is what makes the result interesting: tuning Adam improves *dev* (0.9897 → 0.9905) but not test, while SGD's smaller dev edge (0.9907) does convert. The +0.19/+0.16pt against the current default is roughly five times the seed spread, costs nothing at inference, and would cut the remaining gap to KyTea-with-the-same-dictionary (99.43/99.54) from −0.30/−0.24pt to −0.12/−0.08pt.
+
+It is recorded rather than adopted: switching the default would mean retraining the bundled reference model, regenerating the golden fixtures that pin its output, and a release (docs/RELEASING.md), which is a deliberate act rather than a side effect of a measurement. `--optimizer sgd --lr 5.0` reproduces it.
+
 Two levers were evaluated against this configuration and settled (both measured over 5 seeds). **Early-stopping patience was raised from 5 to 15 and adopted**: dev F1 keeps creeping up across plateaus a dozen epochs long, so patience 5 stopped on a plateau and cost 0.11pt of GSD test F1, while patience 15 costs only training wall-clock (about 22s → 60s) and nothing at inference. **A larger network (d=96, H=512) was rejected**: +0.23pt GSD / +0.10pt PUD for 45% of the inference speed (5.1 → 2.8 M chars/sec), a 627KB → 1511KB model and a 130ms → 467ms load. That is the same speed cost as the dictionary features rejected earlier (−48% for +0.45pt GSD), for half the accuracy and twelve times the model growth.
 
 **The dictionary closes most of that gap, and the reference model this project builds and evaluates now uses one** (`--dict` itself stays opt-in in the trainer: the word list is a file the caller supplies). A dictionary extracted from the training corpus itself is worth +0.42pt GSD, but an external one is worth far more, because UD_Japanese's segmentation standard is UniDic's short unit and UniDic is that lexicon. All rows are 5-seed means against the same no-dictionary baseline; `scripts/fetch_unidic_dict.sh` reproduces the adopted one.
@@ -635,6 +647,9 @@ Every option below means the same thing for both backends, `--lr` included: the 
 | `--optimizer <adam\|sgd>` | optimizer (default adam; sgd is the scale-preserving control of Section 11.6) |
 | `--seed <int>` | random seed (default 42) |
 | `--ed-embedding-update <hybrid\|pure>` | EDLA only: how the embedding is updated (default hybrid, Section 11.3) |
+| `--ed-learn-feedback` | EDLA only: learn the feedback instead of pinning it at the polarity (Kolen-Pollack, Section 11.7) |
+| `--ed-feedback-decay <float>` | EDLA only: the shared decay driving that convergence (default 0.01) |
+| `--ed-feedback-init <float>` | EDLA only: the feedback's starting magnitude (default 1.0) |
 
 When a KyTea-compatible model needs training, the real `train-kytea` (Homebrew-distributed) is called directly as an external tool (this library's own evaluation pipeline, Section 4.8, is a working example).
 
@@ -960,3 +975,23 @@ Incidentally, both backends score higher under tuned SGD than under the Adam def
 **On the pure-diffusion ablation.** Updating the embedding by diffusion alone costs 2.27pt on GSD and 1.89pt on PUD — the one large effect measured here, and the reason `hybrid` is the default. The cause is structural rather than a tuning failure: under that rule `dv_c` depends only on the batch's error sign and the dimension's polarity, never on which characters were in the window, so every row present in a batch moves the same direction and the table cannot learn to tell characters apart. It is worth stating that this is the part of the design the paper does not specify (its networks take fixed inputs), so the failure is of an extension made here, not of EDLA as published.
 
 **Where this sits relative to the paper.** The result is consistent with Fujita's finding that EDLA is close to backpropagation in shallow networks, and says nothing about the depth regime where the same paper measures the gap widening (4 hidden layers on CIFAR-10: 35.5% against 55.2%). This backend is one hidden layer deep and cannot speak to that.
+
+### 11.7 Learned Feedback (Kolen-Pollack)
+
+The 0.16pt the plain-SGD control exposed turns out not to be a credit-assignment gap at all. At a shared learning rate the two rules are level (lr 1.0: backpropagation 0.9790 dev, EDLA 0.9791); the gap exists only because backpropagation can *use* lr 5.0 while fixed-polarity EDLA collapses above 1.0. It is a stability ceiling, not a quality deficit — and that is a much more tractable thing to attack.
+
+`--ed-learn-feedback` implements Kolen-Pollack (Akrout et al. 2019, [arXiv:1904.05391](https://arxiv.org/abs/1904.05391)): the fixed `p_j` becomes a learned per-unit feedback `b_j` that takes the same update and the same decay as `w2_j`, each shrinking only its own value. Their difference is then multiplied by `(1 - decay)` every step, so `b` converges on `w2` while never reading it — the weight transport stays absent, which is the entire point. Convergence is measured, not assumed: the trainer logs `|b-w2|/|w2|` per epoch, and it falls 2.017 → 0.596 → 0.189 → 0.062 → 0.000.
+
+Convergence alone changed nothing (dev 0.9785 at lr 1.0, and still collapsing at 3.0). The reason is the transient: `b` starts at ±1 while `w2` is initialized near `1/sqrt(H)` ≈ 0.06, so the first updates are ~16x backpropagation's and blow up before convergence can happen. `--ed-feedback-init` sets that starting magnitude — using the initializer's public constant, not any trained weight's value, so it is not weight transport either.
+
+With both (`--ed-feedback-decay 0.001 --ed-feedback-init 0.0625`), the ceiling lifts: EDLA trains at lr 3.0 (dev 0.9797) and 5.0 (dev 0.9812) where fixed polarity gives 0.7502 and 0.0000. Over 5 seeds at each configuration's best rate:
+
+| Configuration | GSD test F1 | PUD test F1 | vs BP (GSD) |
+|---|---|---|---|
+| MLP + SGD, lr 5.0 | 98.27% (0.111) | 98.75% (0.063) | — |
+| EDLA fixed polarity + SGD, lr 1.0 | 98.11% (0.036) | 98.67% (0.023) | −0.16pt |
+| **EDLA + Kolen-Pollack + SGD, lr 5.0** | **98.29%** (0.019) | **98.78%** (0.024) | **+0.02pt** |
+
+Learning the feedback closes the gap completely — +0.02pt on both test sets, well inside seed noise, at a *third* of backpropagation's seed variance (sd 0.019 against 0.111). So on this task, at one hidden layer, a rule that never reads a downstream weight and obeys Dale's law matches backpropagation outright. Fixed polarity's 0.16pt was the cost of discarding `|w2_j|`, and Kolen-Pollack recovers it without recovering the weight transport.
+
+Two cautions on how far that generalizes. This is still the shallow regime the source paper identifies as EDLA's most favourable, and Akrout's own evidence for Kolen-Pollack closing deep-network gaps (ImageNet ResNet-18: 29.2% top-1 error against backpropagation's 30.1%) is what would need re-testing here if this network ever grows a second hidden layer. And the fixed-polarity default is unchanged: it is the rule the paper describes, so it stays what `--backend ed` trains, with learned feedback as the documented extension rather than a silent substitution.

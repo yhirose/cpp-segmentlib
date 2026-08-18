@@ -84,7 +84,8 @@ TEST_CASE("EDLA hidden units use their polarity where backprop uses w2") {
     CHECK(loss == doctest::Approx(std::log(2.0)));    // −log sigmoid(0)
 
     Gradients grads;
-    ed::Edla(*backend, ed::EdlaConfig{}).local_update(params, batch, ws, grads);
+    ed::Edla(*backend, ed::EdlaConfig{}, params.config)
+        .local_update(params, batch, ws, grads);
 
     // dy = sigmoid(0) − 1 = −0.5, and the output layer is exact: it is one
     // linear hop from the loss, so EDLA changes nothing here.
@@ -138,7 +139,8 @@ TEST_CASE("EDLA reduces to backprop exactly when every |w2| is 1") {
     net.backward(params, batch, ws, bp);
     (void)net.forward(params, batch, ws);  // backward consumed ws.da/ws.dx
     Gradients edla;
-    ed::Edla(*backend, ed::EdlaConfig{}).local_update(params, batch, ws, edla);
+    ed::Edla(*backend, ed::EdlaConfig{}, params.config)
+        .local_update(params, batch, ws, edla);
 
     CHECK(edla.b2 == bp.b2);
     CHECK(edla.w2 == bp.w2);
@@ -162,7 +164,7 @@ TEST_CASE("the pure embedding rule diffuses without consulting W1") {
     ed::EdlaConfig cfg;
     cfg.embedding_update = ed::EmbeddingUpdate::Pure;
     Gradients grads;
-    ed::Edla(*backend, cfg).local_update(params, batch, ws, grads);
+    ed::Edla(*backend, cfg, params.config).local_update(params, batch, ws, grads);
 
     // dv_c = dy · polarity(c, d) = −0.5 · [+1, −1], the same for both slots,
     // and row 2 fills both: [−1, +1]. Note it does not depend on W1 at all,
@@ -186,7 +188,7 @@ TEST_CASE("repeated EDLA updates drive the loss down") {
     Parameters params = tiny_params();
     const auto backend = make_cpu_backend();
     Net net(*backend);
-    ed::Edla edla(*backend, ed::EdlaConfig{});
+    ed::Edla edla(*backend, ed::EdlaConfig{}, params.config);
     Adam adam(params.config, AdamConfig{});
     Dataset data(set, params.config.embed_dim, 8);
     Batch batch;
@@ -230,6 +232,47 @@ TEST_CASE("Dale's law is imposed at init and reimposed after each step") {
     CHECK(crossed.w2[0] == 0.0f);
     CHECK(crossed.w2[1] == doctest::Approx(-0.2f));
     CHECK(ed::count_pinned(crossed) == 1);
+}
+
+TEST_CASE("Kolen-Pollack converges the feedback onto w2 without reading it") {
+    Parameters params = tiny_params();
+    const auto backend = make_cpu_backend();
+    ed::EdlaConfig cfg;
+    cfg.learn_feedback = true;
+    cfg.feedback_decay = 0.1f;
+    ed::Edla edla(*backend, cfg, params.config);
+
+    // The feedback starts at the polarity, nowhere near w2 = {2, -4}.
+    CHECK(edla.feedback()[0] == doctest::Approx(1.0f));
+    CHECK(edla.feedback()[1] == doctest::Approx(-1.0f));
+
+    // Drive it with a w2 that the "optimizer" leaves alone, so the only thing
+    // acting is the shared decay: the gap must then shrink by exactly
+    // (1 - decay) per step, which is the property the method rests on.
+    const std::vector<float> before = params.w2;
+    const float gap0 = edla.feedback()[0] - params.w2[0];
+    edla.track_feedback(params, before);
+    const float gap1 = edla.feedback()[0] - params.w2[0];
+    CHECK(gap1 == doctest::Approx(gap0 * 0.9f));
+
+    // Iterating closes it, and w2 decays alongside — both weights shrink by
+    // their own value, which is what keeps the rule transport-free.
+    for (int i = 0; i < 200; ++i) {
+        const std::vector<float> w2_before = params.w2;
+        edla.track_feedback(params, w2_before);
+    }
+    CHECK(edla.feedback()[0] == doctest::Approx(params.w2[0]).epsilon(0.01));
+    CHECK(edla.feedback()[1] == doctest::Approx(params.w2[1]).epsilon(0.01));
+    CHECK(std::abs(params.w2[0]) < std::abs(before[0]));  // decayed, not frozen
+
+    // With learning off the feedback never moves: the ablation is exact.
+    Parameters p2 = tiny_params();
+    ed::Edla fixed(*backend, ed::EdlaConfig{}, p2.config);
+    const std::vector<float> w2_before = p2.w2;
+    p2.w2[0] = 99.0f;
+    fixed.track_feedback(p2, w2_before);
+    CHECK(fixed.feedback()[0] == doctest::Approx(1.0f));
+    CHECK(p2.w2[0] == doctest::Approx(99.0f));  // untouched, no decay applied
 }
 
 TEST_CASE("polarity splits the hidden layer in half, contiguously") {
