@@ -1,11 +1,11 @@
 # cpp-fstlib (vendored)
 
 Upstream: https://github.com/yhirose/cpp-fstlib
-Revision: a11658e6b4c5c9b2d0a93c0891891ec13940c7ba
+Revision: v0.1.0
 
-`fstlib.h` is copied verbatim from that revision; `LICENSE` is its own.
-Upstream publishes no tags, so the revision above is what "current" means
-here. Update by replacing the header and this line together.
+`fstlib.h` is copied verbatim from that tag; `LICENSE` is its own.
+Update with `just vendor-update`, which tracks the newest `vX.Y.Z` tag and
+replaces the header and this line together.
 
 The include path is the *parent* directory (`third_party/`, SYSTEM INTERFACE,
 see src/CMakeLists.txt), and `mlp/dictionary.h` includes
