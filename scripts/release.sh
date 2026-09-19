@@ -198,9 +198,12 @@ if [ "$DRY_RUN" -eq 1 ]; then
 else
   if [ "$NEW_VERSION" != "$CURRENT_VERSION" ]; then
     echo "==> Updating $VERSION_HEADER and CMakeLists.txt..."
-    sed -i '' "s/#define SEGMENTLIB_VERSION \"[^\"]*\"/#define SEGMENTLIB_VERSION \"$NEW_VERSION\"/" "$VERSION_HEADER"
-    sed -i '' "s/#define SEGMENTLIB_VERSION_NUM \"0x[0-9a-fA-F]*\"/#define SEGMENTLIB_VERSION_NUM \"$VERSION_HEX\"/" "$VERSION_HEADER"
-    sed -i '' "s/project(cpp-segmentlib VERSION [0-9.]* /project(cpp-segmentlib VERSION $NEW_VERSION /" CMakeLists.txt
+    # `-i.bak` is the in-place form GNU and BSD sed both accept (`-i ''` is
+    # BSD-only: GNU sed reads the '' as the script).
+    sed -i.bak "s/#define SEGMENTLIB_VERSION \"[^\"]*\"/#define SEGMENTLIB_VERSION \"$NEW_VERSION\"/" "$VERSION_HEADER"
+    sed -i.bak "s/#define SEGMENTLIB_VERSION_NUM \"0x[0-9a-fA-F]*\"/#define SEGMENTLIB_VERSION_NUM \"$VERSION_HEX\"/" "$VERSION_HEADER"
+    sed -i.bak "s/project(cpp-segmentlib VERSION [0-9.]* /project(cpp-segmentlib VERSION $NEW_VERSION /" CMakeLists.txt
+    rm -f "$VERSION_HEADER.bak" CMakeLists.txt.bak
     echo "    SEGMENTLIB_VERSION     = \"$NEW_VERSION\""
     echo "    SEGMENTLIB_VERSION_NUM = \"$VERSION_HEX\""
 
