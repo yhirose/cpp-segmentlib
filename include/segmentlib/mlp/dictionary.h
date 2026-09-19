@@ -230,11 +230,37 @@ inline void write_compiled_dictionaries(bytes::BinaryWriter& out,
     }
 }
 
+// cpp-fstlib now ends its byte code in a trailer (body size, hash, format
+// version, magic) and refuses a byte code without one. A model written before
+// that carries the bare body. The blob is length-prefixed and the whole file
+// parsed before anything runs, so the container already guarantees what the
+// trailer would; it is appended here so the matcher opens the body, and a
+// model file keeps loading across the change without being rewritten.
+inline void seal_legacy_fst(std::string& byte_code) {
+    if (byte_code.empty()) {
+        return;  // no dictionary: nothing to open (DictMatcher stays impl-less)
+    }
+    {
+        fst::FstHeader header;
+        fst::FstTrailer probe;  // a failed read leaves its fields unspecified
+        if (fst::read_header(byte_code.data(), byte_code.size(), header, probe)) {
+            return;  // already sealed
+        }
+    }
+    fst::FstTrailer trailer;
+    trailer.body_size = byte_code.size();
+    trailer.body_hash = fst::xxh64(byte_code.data(), byte_code.size());
+    std::ostringstream os;
+    trailer.write(os);
+    byte_code += os.str();
+}
+
 [[nodiscard]] inline CompiledDictionaries read_compiled_dictionaries(
     bytes::BinaryReader& in, std::uint32_t num_dicts) {
     CompiledDictionaries out;
     out.num_dicts = num_dicts;
     out.fst = in.read_blob(in.read<std::uint32_t>());
+    seal_legacy_fst(out.fst);
 
     const std::uint32_t sets = in.read<std::uint32_t>();
     in.require_capacity(std::uint64_t{sets} + 1, sizeof(std::uint32_t));
