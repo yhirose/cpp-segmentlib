@@ -18,6 +18,13 @@ committed copy here replaced that arrangement.
 | Command | `just model` (see the `model:` recipe in the justfile for the exact flags; default seed) |
 | Dev accuracy | boundary F1 0.9897 (P 0.9886, R 0.9908) on the UD-GSD dev split |
 
+The dictionary FST inside it (field 17) was later re-encoded for the
+cpp-fstlib byte code that ends in a trailer (body size, hash, format
+version): its 565,291 entries were enumerated and compiled afresh with the
+current cpp-fstlib, and every other byte of the file is as trained. The
+network is unchanged, so its output is too (the golden fixture below did
+not move).
+
 Training is seeded and was verified bit-reproducible on the machine that
 produced this file (two runs, byte-identical). The GEMMs go through BLAS,
 so reproduction on a different platform or BLAS implementation may differ

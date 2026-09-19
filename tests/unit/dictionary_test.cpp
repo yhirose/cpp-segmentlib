@@ -158,25 +158,30 @@ TEST_CASE("features_into reuses the caller's buffers") {
     CHECK(at(out, 1) == std::vector<std::uint32_t>{feat(0, DictPosition::Right, 2)});
 }
 
-TEST_CASE("a model's FST from before cpp-fstlib's trailer still loads") {
-    // The bundled model predates the trailer; a file's blob is sealed on read,
-    // so a bare body (the trailer cut off here) matches like a sealed one.
+TEST_CASE("a model's FST is refused without cpp-fstlib's trailer, or cut short") {
+    // A model file carries the byte code as cpp-fstlib writes it, trailer
+    // included. One from before the trailer (the body alone) and one cut
+    // anywhere are both unusable, which the loader reports as a malformed
+    // model rather than matching against them.
     const std::vector<std::vector<std::string>> dictionaries{{"日本", "語"}};
-    auto compiled = compile_dictionaries(dictionaries);
+    const auto compiled = compile_dictionaries(dictionaries);
     REQUIRE(compiled.fst.size() > fst::FstTrailer::kByteSize);
-    compiled.fst.resize(compiled.fst.size() - fst::FstTrailer::kByteSize);
-    REQUIRE(!DictMatcher(compiled).valid());  // the bare body alone is refused
 
-    bytes::BinaryWriter w;
-    write_compiled_dictionaries(w, compiled);
-    bytes::BinaryReader r(w.data());
-    const DictMatcher loaded(read_compiled_dictionaries(r, compiled.num_dicts));
-    REQUIRE(loaded.valid());
-    const auto expected = features_of(matcher_of(dictionaries), "日本語");
-    const auto got = features_of(loaded, "日本語");
-    CHECK(got.indices == expected.indices);
-    CHECK(got.offsets == expected.offsets);
-    CHECK(!got.indices.empty());
+    const auto round_trip = [&](std::string fst) {
+        auto c = compiled;
+        c.fst = std::move(fst);
+        bytes::BinaryWriter w;
+        write_compiled_dictionaries(w, c);
+        bytes::BinaryReader r(w.data());
+        return DictMatcher(read_compiled_dictionaries(r, c.num_dicts));
+    };
+    CHECK(round_trip(compiled.fst).valid());
+    CHECK(!round_trip(compiled.fst.substr(
+                          0, compiled.fst.size() - fst::FstTrailer::kByteSize))
+               .valid());
+    for (std::size_t n = 1; n < compiled.fst.size(); ++n) {
+        CHECK(!round_trip(compiled.fst.substr(0, n)).valid());
+    }
 }
 
 TEST_CASE("a copied matcher matches the same as its source") {
