@@ -144,6 +144,17 @@ C++17 is a floor, not a ceiling.
 
 The trainer, the CLI and the test suite still require C++23.
 
+### Unicode version
+
+The MLP and EDLA backends split text into extended grapheme clusters
+(UAX #29) using **Unicode 18.0** data; the KyTea-compatible backend works on
+codepoints and does not depend on it. The version is available as
+`segmentlib::unicode::kEgcUnicodeVersion` (major x 100 + minor, so `1800`),
+and `segmenter --version` prints it. A model file records the Unicode version
+it was trained with, and loading one trained with different data prints a
+warning. `scripts/gen_egc_table.py` regenerates the property table for a new
+version.
+
 ## License
 
 MIT License. See [LICENSE](LICENSE).

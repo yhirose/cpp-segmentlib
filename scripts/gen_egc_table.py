@@ -33,9 +33,10 @@ import sys
 import urllib.request
 from pathlib import Path
 
-UNICODE_VERSION = "16.0.0"
-# major*100 + minor, the encoding design.ja.md 5.7 uses for `unicode_version`.
-UNICODE_VERSION_ENCODED = 1600
+UNICODE_VERSION = "18.0.0"
+# major*100 + minor, the encoding design.ja.md 4.7 uses for `unicode_version`.
+_major, _minor, _ = (int(p) for p in UNICODE_VERSION.split("."))
+UNICODE_VERSION_ENCODED = _major * 100 + _minor
 
 MAX_CODEPOINT = 0x110000
 BLOCK_SIZE = 256

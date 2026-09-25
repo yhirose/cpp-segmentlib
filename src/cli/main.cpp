@@ -5,6 +5,7 @@
 
 #include "commands.h"
 #include "segmentlib/types.h"
+#include "segmentlib/unicode/egc.h"
 
 namespace {
 
@@ -16,7 +17,7 @@ int usage() {
     std::println(stderr, "  train     train a model (--backend mlp|ed; needs a training-enabled build)");
     std::println(stderr, "");
     std::println(stderr, "  -h, --help       show this message");
-    std::println(stderr, "  -v, --version    show the segmentlib version");
+    std::println(stderr, "  -v, --version    show the segmentlib and Unicode versions");
     return 2;
 }
 
@@ -42,7 +43,9 @@ int main(int argc, char** argv) {
         return 0;
     }
     if (command == "-v" || command == "--version") {
-        std::println("segmenter {}", SEGMENTLIB_VERSION);
+        std::println("segmenter {} (Unicode {}.{})", SEGMENTLIB_VERSION,
+                     segmentlib::unicode::kEgcUnicodeVersion / 100,
+                     segmentlib::unicode::kEgcUnicodeVersion % 100);
         return 0;
     }
     std::println(stderr, "segmenter: unknown command '{}'", command);
