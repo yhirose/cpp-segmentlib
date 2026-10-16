@@ -1,6 +1,6 @@
 #pragma once
 
-#include <cassert>
+#include <exception>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -58,37 +58,31 @@ public:
     }
     [[nodiscard]] explicit constexpr operator bool() const noexcept { return has_value(); }
 
-    // Reading the wrong branch is a precondition violation (as with
-    // std::expected), asserted in debug builds. std::get here would throw out
-    // of a noexcept function, i.e. terminate.
-    [[nodiscard]] constexpr T& operator*() & noexcept {
-        assert(has_value());
-        return *std::get_if<0>(&storage_);
-    }
-    [[nodiscard]] constexpr const T& operator*() const& noexcept {
-        assert(has_value());
-        return *std::get_if<0>(&storage_);
-    }
-    [[nodiscard]] constexpr T&& operator*() && noexcept {
-        assert(has_value());
-        return std::move(*std::get_if<0>(&storage_));
-    }
+    // Reading the wrong branch is a precondition violation and terminates in
+    // every build type (it used to, via std::get throwing out of a noexcept
+    // function; a null dereference in Release would be a step back).
+    [[nodiscard]] constexpr T& operator*() & noexcept { return *value_ptr(); }
+    [[nodiscard]] constexpr const T& operator*() const& noexcept { return *value_ptr(); }
+    [[nodiscard]] constexpr T&& operator*() && noexcept { return std::move(*value_ptr()); }
 
-    [[nodiscard]] constexpr T* operator->() noexcept {
-        assert(has_value());
-        return std::get_if<0>(&storage_);
-    }
-    [[nodiscard]] constexpr const T* operator->() const noexcept {
-        assert(has_value());
-        return std::get_if<0>(&storage_);
-    }
+    [[nodiscard]] constexpr T* operator->() noexcept { return value_ptr(); }
+    [[nodiscard]] constexpr const T* operator->() const noexcept { return value_ptr(); }
 
     [[nodiscard]] constexpr const E& error() const& noexcept {
-        assert(!has_value());
+        if (has_value()) std::terminate();
         return *std::get_if<1>(&storage_);
     }
 
 private:
+    constexpr T* value_ptr() noexcept {
+        if (!has_value()) std::terminate();
+        return std::get_if<0>(&storage_);
+    }
+    constexpr const T* value_ptr() const noexcept {
+        if (!has_value()) std::terminate();
+        return std::get_if<0>(&storage_);
+    }
+
     std::variant<T, E> storage_;
 };
 
@@ -111,7 +105,7 @@ public:
     constexpr void operator*() const noexcept {}
 
     [[nodiscard]] constexpr const E& error() const& noexcept {
-        assert(!has_value());
+        if (has_value()) std::terminate();
         return *error_;
     }
 

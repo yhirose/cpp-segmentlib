@@ -6,6 +6,7 @@
 #include <cstddef>
 #include <cstdint>
 #include <iterator>
+#include <utility>
 #include <vector>
 
 #include "segmentlib/mlp/kernels.h"
@@ -151,9 +152,6 @@ public:
     }
 
 private:
-    // Per-h fallback contribution (the shared integer kernel of I.1-(2));
-    // callers requantize per mode.
-    //
     // The shared integer kernel of I.1-(1)/(2): given the constituent rows of
     // one EGC, compute every hidden unit's contribution at window position j:
     //   sum_c[k] = Σ_rows emb_q[row, k]                        (int32)

@@ -318,7 +318,7 @@ bool prepare(const Options& opt, Prepared& out) {
 }
 
 // Steps 4-5: quantize the trained parameters, report how many decisions that
-// cost, and write the model behind `header`.
+// cost, and write the model behind `format`'s header line.
 int finish(const Options& opt, const Prepared& p, const Parameters& params,
            ComputeBackend& backend, const mlp::FormatId& format) {
     if (!all_finite(params)) {

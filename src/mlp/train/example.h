@@ -24,12 +24,13 @@ namespace segmentlib::mlp::train {
 // layout), so training and inference produce identical features by
 // construction.
 
+inline constexpr std::uint32_t kDefaultMinCount = 2;
+
 // Builds the codepoint vocabulary (5.3): counts *normalized* codepoints over
 // the corpus and keeps those occurring at least `min_count` times, so
 // low-frequency codepoints train the UNK row instead of leaving it at its
 // initial value. Sentences with invalid UTF-8 are ignored here; they are
 // counted and skipped during example generation.
-inline constexpr std::uint32_t kDefaultMinCount = 2;
 [[nodiscard]] Vocab build_vocab(std::span<const AnnotatedSentence> sentences,
                                 std::uint32_t min_count = kDefaultMinCount);
 

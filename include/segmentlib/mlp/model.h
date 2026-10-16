@@ -39,6 +39,11 @@ struct FormatId {
     std::string_view wrong_signature;
     std::string_view wrong_version;
     std::string_view malformed;
+
+    // The first line of a file in this format, without the newline.
+    [[nodiscard]] std::string header_line() const {
+        return std::string(signature) + std::string(version);
+    }
 };
 
 inline constexpr FormatId kMlpFormat{
@@ -93,10 +98,9 @@ struct Config {  // 5.7 fields 1-4b
     std::uint16_t unicode_version = 0;
 };
 
-// An immutable loaded MLP model: the raw
-// quantized parameters from the file, plus the load-time derived structures —
-// precompute table, dictionary matcher, dictionary columns and biases already
-// converted to accumulator integer scale. All the
+// An immutable loaded MLP model: the precompute table (which owns the
+// quantized embedding and W1), the dictionary matcher, W2, and the dictionary
+// columns and biases already converted to accumulator integer scale. All the
 // scorer touches is integers; no scale multiplication survives into the hot
 // path.
 //

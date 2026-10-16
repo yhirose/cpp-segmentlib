@@ -227,7 +227,8 @@ else
 
   echo ""
   echo "==> Pushing..."
-  git push && git push origin "v$NEW_VERSION"
+  REMOTE=$(git config "branch.$(git branch --show-current).remote" || echo origin)
+  git push && git push "$REMOTE" "v$NEW_VERSION"
 
   echo ""
   echo "==> Released v$NEW_VERSION"

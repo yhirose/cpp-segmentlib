@@ -40,7 +40,7 @@ serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
     assert(quantized.b1.size() == c.hidden);
 
     bytes::BinaryWriter out;
-    out.write_line(std::string(format.signature) + std::string(format.version));
+    out.write_line(format.header_line());
 
     // Config (fields 1-4b). unicode_version records which Unicode data the
     // EGC splitter used at training time; the loader warns on mismatch.
