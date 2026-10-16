@@ -166,31 +166,45 @@ parse_partial_line(std::string_view line) {
     return std::optional<AnnotatedSentence>{std::move(sentence)};
 }
 
+// Calls on_line(line) for each line of `text` (without its '\n' or a trailing
+// '\r'), until on_line returns false.
+template <class OnLine>
+void for_each_line(std::string_view text, OnLine on_line) {
+    std::size_t pos = 0;
+    while (pos < text.size()) {
+        std::size_t eol = text.find('\n', pos);
+        if (eol == std::string_view::npos) {
+            eol = text.size();
+        }
+        std::string_view line = text.substr(pos, eol - pos);
+        if (line.ends_with('\r')) {
+            line.remove_suffix(1);
+        }
+        if (!on_line(line)) {
+            return;
+        }
+        pos = eol + 1;
+    }
+}
+
 template <class ParseLine>
 std::expected<std::vector<AnnotatedSentence>, Error>
 parse_lines(std::string_view content, ParseLine parse_line) {
     std::vector<AnnotatedSentence> sentences;
-    std::size_t pos = 0;
-    while (pos <= content.size()) {
-        std::size_t eol = content.find('\n', pos);
-        if (eol == std::string_view::npos) {
-            if (pos == content.size()) {
-                break;
-            }
-            eol = content.size();
-        }
-        std::string_view line = content.substr(pos, eol - pos);
-        if (line.ends_with('\r')) {
-            line.remove_suffix(1);
-        }
+    std::optional<Error> failure;
+    for_each_line(content, [&](std::string_view line) {
         auto parsed = parse_line(line);
         if (!parsed) {
-            return std::unexpected(parsed.error());
+            failure = parsed.error();
+            return false;
         }
         if (*parsed) {
             sentences.push_back(std::move(**parsed));
         }
-        pos = eol + 1;
+        return true;
+    });
+    if (failure) {
+        return std::unexpected(*failure);
     }
     return sentences;
 }
@@ -245,30 +259,14 @@ read_dictionary(const std::filesystem::path& path) {
         return std::unexpected(content.error());
     }
     std::vector<std::string> words;
-    std::size_t pos = 0;
-    const std::string_view text = *content;
-    while (pos <= text.size()) {
-        std::size_t eol = text.find('\n', pos);
-        if (eol == std::string_view::npos) {
-            if (pos == text.size()) {
-                break;
-            }
-            eol = text.size();
-        }
-        std::string_view line = text.substr(pos, eol - pos);
-        if (line.ends_with('\r')) {
-            line.remove_suffix(1);
-        }
+    for_each_line(*content, [&](std::string_view line) {
         // The word is the first tab/space-separated field ("単語 タグ").
-        const std::size_t sep = line.find_first_of(" \t");
-        if (sep != std::string_view::npos) {
-            line = line.substr(0, sep);
-        }
+        line = line.substr(0, line.find_first_of(" \t"));
         if (!line.empty()) {
             words.emplace_back(line);
         }
-        pos = eol + 1;
-    }
+        return true;
+    });
     return words;
 }
 

@@ -124,6 +124,14 @@ struct Int16Reference {
 
 }  // namespace
 
+bool all_finite(const Parameters& params) {
+    const auto finite = [](const std::vector<float>& v) {
+        return std::all_of(v.begin(), v.end(), [](float x) { return std::isfinite(x); });
+    };
+    return finite(params.embedding) && finite(params.w1) && finite(params.wdict) &&
+           finite(params.b1) && finite(params.w2) && std::isfinite(params.b2);
+}
+
 QuantizedModel quantize(const Parameters& params, const ExampleSet& calibration,
                         ComputeBackend& backend, std::uint32_t batch_size) {
     QuantizedModel q;

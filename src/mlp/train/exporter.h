@@ -9,6 +9,7 @@
 #include <vector>
 
 #include "mlp/train/quantize.h"
+#include "segmentlib/mlp/model.h"
 #include "segmentlib/mlp/vocab.h"
 #include "segmentlib/types.h"
 
@@ -19,11 +20,10 @@
 
 namespace segmentlib::mlp::train {
 
-// The header line the MLP backend's models open with. The EDLA trainer passes
-// its own (segmentlib::ed::kModelSignature + version): the body below is
-// identical either way -- EDLA changes how the weights were learned, not what
-// the file has to record -- so only the first line tells the two apart.
-inline constexpr std::string_view kMlpHeader = "SegmentLibMLP 1";
+// The model's header line is `format.signature + format.version`: mlp::kMlpFormat
+// by default, ed::kEdFormat for the EDLA trainer. The body below is identical
+// either way -- EDLA changes how the weights were learned, not what the file
+// has to record -- so only the first line tells the two apart.
 
 // Serializes the model to the 5.7 byte layout. `vocab` must be the
 // vocabulary the model was trained with (quantized.config.vocab_size ==
@@ -34,13 +34,13 @@ inline constexpr std::string_view kMlpHeader = "SegmentLibMLP 1";
 [[nodiscard]] std::vector<std::byte>
 serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
                 std::span<const std::vector<std::string>> dictionaries,
-                std::string_view header = kMlpHeader);
+                const mlp::FormatId& format = mlp::kMlpFormat);
 
 // serialize_model + write to a file. IoError on failure.
 [[nodiscard]] std::expected<void, Error>
 export_model(const std::filesystem::path& path, const QuantizedModel& quantized,
              const Vocab& vocab,
              std::span<const std::vector<std::string>> dictionaries,
-             std::string_view header = kMlpHeader);
+             const mlp::FormatId& format = mlp::kMlpFormat);
 
 }  // namespace segmentlib::mlp::train

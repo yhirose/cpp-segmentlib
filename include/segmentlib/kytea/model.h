@@ -3,7 +3,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <functional>
 #include <limits>
 #include <string>
 #include <string_view>
@@ -80,29 +79,6 @@ inline void skip_kytea_string(BinaryReader& r) {
     r.skip(std::size_t{len} * kCharBytes);
 }
 
-// Advances past a Dictionary<Entry> without materializing it. Used for the
-// selfDict (empty in WS models) and any dictionaries in skipped tag models.
-inline void skip_dictionary(BinaryReader& r,
-                            const std::function<void(BinaryReader&)>& skip_entry) {
-    discard<std::uint8_t>(r);  // numDicts
-    const auto n_states = r.read<std::uint32_t>();
-    if (n_states == 0) {
-        return;  // absent dictionary: no entries follow
-    }
-    for (std::uint32_t s = 0; s < n_states; ++s) {
-        discard<std::uint32_t>(r);  // failure
-        const auto n_gotos = r.read<std::uint32_t>();
-        r.skip(std::size_t{n_gotos} * (kCharBytes + sizeof(std::uint32_t)));
-        const auto n_out = r.read<std::uint32_t>();
-        r.skip(std::size_t{n_out} * sizeof(std::uint32_t));
-        discard<std::uint8_t>(r);  // isBranch
-    }
-    const auto n_entries = r.read<std::uint32_t>();
-    for (std::uint32_t i = 0; i < n_entries; ++i) {
-        skip_entry(r);
-    }
-}
-
 // Advances past a FeatureLookup (the classifier attached to a KyteaModel).
 // `active == 0` means no lookup and nothing further to skip.
 inline void skip_feature_lookup(BinaryReader& r) {
@@ -110,9 +86,9 @@ inline void skip_feature_lookup(BinaryReader& r) {
     if (active == 0) {
         return;
     }
-    skip_dictionary(r, skip_featvec);  // charDict
-    skip_dictionary(r, skip_featvec);  // typeDict
-    skip_dictionary(r, skip_featvec);  // selfDict
+    skip_automaton(r, skip_featvec);  // charDict
+    skip_automaton(r, skip_featvec);  // typeDict
+    skip_automaton(r, skip_featvec);  // selfDict
     skip_featvec(r);                   // dictVector (WS only)
     skip_featvec(r);                   // biases
     skip_featvec(r);                   // tagDictVector
@@ -182,6 +158,36 @@ inline void skip_lm(BinaryReader& r) {
         if (key_len != n) {
             discard<double>(r);  // fallback weight
         }
+    }
+}
+
+// What the scorer (scorer.h) assumes of the vectors and dictionaries it reads
+// unchecked on the hot path. Each is verified once, at load, so a malformed
+// model is rejected rather than indexed out of bounds.
+
+// add_ngram_scores reads 2*window weights from every n-gram vector.
+inline auto ngram_vector_check(std::size_t window) {
+    return [need = 2 * window](const FeatVec& v, std::uint32_t) { return v.size() >= need; };
+}
+
+// add_dictionary_scores counts char_length back from the match end, so it must
+// be that of a string the matching state can have consumed.
+inline bool word_entry_check(const WordEntry& e, std::uint32_t depth) {
+    return e.char_length >= 1 && e.char_length <= depth;
+}
+
+// in_dict is an 8-bit mask, and dict_vector is indexed by (sub-dictionary,
+// label length, L/I/R).
+inline void check_dictionary_features(const Config& cfg,
+                                      const Automaton<WordEntry>& word_dict,
+                                      const FeatVec& dict_vector) {
+    if (word_dict.empty() || dict_vector.empty()) {
+        return;
+    }
+    const std::size_t num_dicts = word_dict.num_dicts();
+    if (num_dicts > 8 || cfg.dict_n == 0 ||
+        dict_vector.size() < num_dicts * 3 * cfg.dict_n) {
+        throw ParseError("dictionary feature vector inconsistent with the dictionary");
     }
 }
 
@@ -311,17 +317,11 @@ private:
         if (r.read<std::uint8_t>() == 0) {
             throw ParseError("word-segmentation model has no feature lookup");
         }
-        // add_ngram_scores reads 2*window weights per n-gram.
-        const auto window_check = [](std::size_t window) {
-            return [need = 2 * window](const FeatVec& v, std::uint32_t) {
-                return v.size() >= need;
-            };
-        };
         Automaton<FeatVec> char_dict =
-            Automaton<FeatVec>::read(r, read_featvec, window_check(cfg.char_window));
+            Automaton<FeatVec>::read(r, read_featvec, ngram_vector_check(cfg.char_window));
         Automaton<FeatVec> type_dict =
-            Automaton<FeatVec>::read(r, read_featvec, window_check(cfg.type_window));
-        skip_dictionary(r, skip_featvec);  // selfDict
+            Automaton<FeatVec>::read(r, read_featvec, ngram_vector_check(cfg.type_window));
+        skip_automaton(r, skip_featvec);  // selfDict
         FeatVec dict_vector = read_featvec(r);
         FeatVec biases = read_featvec(r);
         skip_featvec(r);  // tagDictVector
@@ -338,25 +338,14 @@ private:
 
         // --- word dictionary (needed for the D features) ---
         const int num_tags = cfg.num_tags;
-        // add_dictionary_scores counts char_length back from the match end.
         Automaton<WordEntry> word_dict = Automaton<WordEntry>::read(
             r,
             [num_tags](bytes::BinaryReader& rr) { return read_word_entry(rr, num_tags); },
-            [](const WordEntry& e, std::uint32_t depth) {
-                return e.char_length >= 1 && e.char_length <= depth;
-            });
-        // in_dict is an 8-bit mask; dict_vector is indexed by
-        // (sub-dictionary, label length, L/I/R).
-        if (!word_dict.empty() && !dict_vector.empty()) {
-            const std::size_t num_dicts = word_dict.num_dicts();
-            if (num_dicts > 8 || cfg.dict_n == 0 ||
-                dict_vector.size() < num_dicts * 3 * cfg.dict_n) {
-                throw ParseError("dictionary feature vector inconsistent with the dictionary");
-            }
-        }
+            word_entry_check);
+        check_dictionary_features(cfg, word_dict, dict_vector);
 
         // --- subword dictionary (ProbTagEntry) + per-level reading LMs, skipped ---
-        skip_dictionary(r, [num_tags](bytes::BinaryReader& rr) {
+        skip_automaton(r, [num_tags](bytes::BinaryReader& rr) {
             skip_prob_subword_entry(rr, num_tags);
         });
         for (int i = 0; i < num_tags; ++i) {

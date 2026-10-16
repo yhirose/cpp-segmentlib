@@ -46,7 +46,6 @@ std::string synthetic_corpus(int lines) {
     return corpus;
 }
 
-const std::string kEdHeader = std::string(ed::kModelSignature) + "1";
 
 }  // namespace
 
@@ -74,7 +73,7 @@ TEST_CASE("EDLA inference is bit-exact with the trainer's int16 reference") {
     // Quantization and export are the MLP backend's, unchanged: an EDLA model
     // records the same tensors, so only the header line differs.
     const QuantizedModel q = quantize(trained.params, set, *backend);
-    const std::vector<std::byte> bytes = serialize_model(q, vocab, dicts, kEdHeader);
+    const std::vector<std::byte> bytes = serialize_model(q, vocab, dicts, ed::kEdFormat);
     const auto model = ed::Model::load_from_bytes(bytes, mlp::TablePrecision::Int32);
     REQUIRE(model.has_value());
 
@@ -117,7 +116,7 @@ TEST_CASE("end to end: train with EDLA, export, load, tokenize") {
     CHECK(trained.dev_metrics.f1 > 0.95);
 
     const QuantizedModel q = quantize(trained.params, set, *backend);
-    auto model = ed::Model::load_from_bytes(serialize_model(q, vocab, {}, kEdHeader));
+    auto model = ed::Model::load_from_bytes(serialize_model(q, vocab, {}, ed::kEdFormat));
     REQUIRE(model.has_value());
     const ed::EdBackend backend_ed(std::move(*model));
 
@@ -193,7 +192,7 @@ TEST_CASE("an EDLA model round-trips through Segmenter::load") {
     const QuantizedModel q = quantize(trained.params, set, *backend);
 
     const std::filesystem::path path = "segmentlib_ed_roundtrip_test.mod";
-    const auto written = export_model(path, q, vocab, {}, kEdHeader);
+    const auto written = export_model(path, q, vocab, {}, ed::kEdFormat);
     REQUIRE(written.has_value());
 
     const auto segmenter = Segmenter::load(path);

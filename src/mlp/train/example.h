@@ -29,8 +29,9 @@ namespace segmentlib::mlp::train {
 // low-frequency codepoints train the UNK row instead of leaving it at its
 // initial value. Sentences with invalid UTF-8 are ignored here; they are
 // counted and skipped during example generation.
+inline constexpr std::uint32_t kDefaultMinCount = 2;
 [[nodiscard]] Vocab build_vocab(std::span<const AnnotatedSentence> sentences,
-                                std::uint32_t min_count = 2);
+                                std::uint32_t min_count = kDefaultMinCount);
 
 // The corpus converted to training examples. Encoded sentences are kept once
 // (flattened CSR); examples are index pairs into them, and windows are

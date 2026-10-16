@@ -68,14 +68,17 @@ inline void relu_i32(std::int32_t* acc, std::size_t n) {
 //   return Σ w2·acc
 // `blocks[0..nblocks)` are the H-length int16 contributions (the 2w window
 // table blocks in window order, then any dictionary columns), added with
-// per-lane saturation in that order. The fusion keeps each H-chunk of the accumulator in
-// registers across all the adds and the relu, eliminating the ~2w redundant
-// accumulator round-trips through memory that dominate the scoring hot path.
+// per-lane saturation in that order. The fusion keeps each H-chunk of the
+// accumulator in registers across all the adds and the relu, eliminating the
+// ~2w redundant accumulator round-trips through memory that dominate the
+// scoring hot path. Covers hidden units [begin, end); the SIMD kernels finish
+// their tails here.
 [[nodiscard]] inline std::int64_t fused_score_i16(
     const std::int16_t* b1, const std::int16_t* const* blocks,
-    std::size_t nblocks, const std::int16_t* w2, std::size_t h) {
+    std::size_t nblocks, const std::int16_t* w2, std::size_t begin,
+    std::size_t end) {
     std::int64_t sum = 0;
-    for (std::size_t i = 0; i < h; ++i) {
+    for (std::size_t i = begin; i < end; ++i) {
         std::int32_t a = b1[i];
         for (std::size_t b = 0; b < nblocks; ++b) {
             a = std::clamp<std::int32_t>(a + blocks[b][i], -32768, 32767);
@@ -140,15 +143,7 @@ inline void relu_i32(std::int32_t* acc, std::size_t n) {
         sum = vpadalq_s32(sum, vmull_high_s16(w, a));
     }
     std::int64_t total = vaddvq_s64(sum);
-    for (; i < h; ++i) {  // tail, identical per-lane order
-        std::int32_t a = b1[i];
-        for (std::size_t b = 0; b < nblocks; ++b) {
-            a = std::clamp<std::int32_t>(a + blocks[b][i], -32768, 32767);
-        }
-        a = std::max<std::int32_t>(a, 0);
-        total += static_cast<std::int64_t>(w2[i]) * a;
-    }
-    return total;
+    return total + scalar::fused_score_i16(b1, blocks, nblocks, w2, i, h);
 }
 
 #elif defined(SEGMENTLIB_KERNELS_AVX2)
@@ -232,15 +227,7 @@ inline void relu_i32(std::int32_t* acc, std::size_t n) {
     alignas(32) std::int64_t lanes[4];
     _mm256_store_si256(reinterpret_cast<__m256i*>(lanes), sum);
     std::int64_t total = lanes[0] + lanes[1] + lanes[2] + lanes[3];
-    for (; i < h; ++i) {  // tail, identical per-lane order
-        std::int32_t a = b1[i];
-        for (std::size_t b = 0; b < nblocks; ++b) {
-            a = std::clamp<std::int32_t>(a + blocks[b][i], -32768, 32767);
-        }
-        a = std::max<std::int32_t>(a, 0);
-        total += static_cast<std::int64_t>(w2[i]) * a;
-    }
-    return total;
+    return total + scalar::fused_score_i16(b1, blocks, nblocks, w2, i, h);
 }
 
 #else  // scalar dispatch
@@ -259,7 +246,7 @@ inline void relu_i32(std::int32_t* acc, std::size_t n) {
 [[nodiscard]] inline std::int64_t fused_score_i16(
     const std::int16_t* b1, const std::int16_t* const* blocks,
     std::size_t nblocks, const std::int16_t* w2, std::size_t h) {
-    return scalar::fused_score_i16(b1, blocks, nblocks, w2, h);
+    return scalar::fused_score_i16(b1, blocks, nblocks, w2, 0, h);
 }
 
 #endif

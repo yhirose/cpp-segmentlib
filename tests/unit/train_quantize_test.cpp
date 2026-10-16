@@ -1,6 +1,7 @@
 #include <doctest/doctest.h>
 
 #include <cmath>
+#include <limits>
 #include <random>
 #include <string>
 #include <vector>
@@ -60,6 +61,21 @@ std::string synthetic_corpus() {
 }
 
 }  // namespace
+
+TEST_CASE("all_finite flags NaN and infinite parameters") {
+    NetConfig config;
+    config.window = 1;
+    config.embed_dim = 2;
+    config.hidden = 2;
+    config.vocab_size = 3;
+    Parameters p = Parameters::init(config, 1);
+    CHECK(all_finite(p));
+    p.w1[0] = std::numeric_limits<float>::quiet_NaN();
+    CHECK(!all_finite(p));
+    p.w1[0] = 0.0f;
+    p.b2 = std::numeric_limits<float>::infinity();
+    CHECK(!all_finite(p));
+}
 
 TEST_CASE("max-abs scales and bounded round-trip error") {
     const ExampleSet set = tiny_set();

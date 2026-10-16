@@ -69,6 +69,20 @@ inline double read_scale(bytes::BinaryReader& in, const char* what) {
     return s;
 }
 
+// b1_q must fit int32; |b2_q| ≤ 2^62 keeps dot (≤ 2^62) + b2_q in int64. The
+// negated comparisons also reject NaN.
+inline void check_biases(const std::vector<double>& b1, double b2, double acc_scale,
+                         double w2_scale) {
+    for (const double b : b1) {
+        if (!(std::fabs(b / acc_scale) <= 2147483647.0)) {
+            throw bytes::ParseError("first-layer bias out of range");
+        }
+    }
+    if (!(std::fabs(b2 / (w2_scale * acc_scale)) <= 4611686018427387904.0)) {
+        throw bytes::ParseError("output bias out of range");
+    }
+}
+
 }  // namespace detail
 
 struct Config {  // 5.7 fields 1-4b
@@ -155,13 +169,8 @@ public:
     }
     [[nodiscard]] const DictMatcher& dict() const noexcept { return parts_.dict; }
 
-    // Raw quantized layers (5.7 fields 11/12/15).
-    [[nodiscard]] Span<const std::int16_t> embedding() const noexcept {
-        return parts_.embedding;
-    }
-    [[nodiscard]] Span<const std::int16_t> w1() const noexcept {
-        return parts_.w1;
-    }
+    // The output layer (5.7 field 15). The embedding and W1 live in the
+    // precompute table, which needs them for the fallback path.
     [[nodiscard]] Span<const std::int16_t> w2() const noexcept {
         return parts_.w2;
     }
@@ -205,8 +214,6 @@ private:
     struct Parts {
         Config config;
         Vocab vocab;
-        std::vector<std::int16_t> embedding;  // V × d
-        std::vector<std::int16_t> w1;         // H × 2w·d
         std::vector<std::int16_t> w2;         // H
         std::vector<std::int32_t> b1_q;       // H
         std::int64_t b2_q = 0;
@@ -270,8 +277,8 @@ private:
         const std::size_t in_dim = 2u * c.char_window * d;
         const std::size_t fd =
             static_cast<std::size_t>(c.num_dicts) * kDictFeaturesPerDict;
-        parts.embedding = detail::read_i16_tensor(in, vocab_size * d);
-        parts.w1 = detail::read_i16_tensor(in, h * in_dim);
+        std::vector<std::int16_t> embedding = detail::read_i16_tensor(in, vocab_size * d);
+        std::vector<std::int16_t> w1 = detail::read_i16_tensor(in, h * in_dim);
         const std::vector<std::int16_t> wdict =
             c.num_dicts > 0 ? detail::read_i16_tensor(in, h * fd)
                             : std::vector<std::int16_t>{};
@@ -282,15 +289,7 @@ private:
         }
         parts.w2 = detail::read_i16_tensor(in, h);
         const double b2 = in.read<double>();
-        // b1_q must fit int32; |b2_q| ≤ 2^62 keeps dot (≤ 2^62) + b2_q in int64.
-        for (const double b : b1) {
-            if (!(std::fabs(b / acc_scale) <= 2147483647.0)) {
-                throw ParseError("first-layer bias out of range");
-            }
-        }
-        if (!(std::fabs(b2 / (w2_scale * acc_scale)) <= 4611686018427387904.0)) {
-            throw ParseError("output bias out of range");
-        }
+        detail::check_biases(b1, b2, acc_scale, w2_scale);
 
         // Dictionaries (field 17): the compiled matcher, ready to use.
         CompiledDictionaries compiled;
@@ -311,7 +310,7 @@ private:
         // Load-time derived structures (I.4): everything converted to the
         // accumulator integer scale once, here.
         const double r = emb_scale * w1_scale / acc_scale;
-        parts.precompute = PrecomputeTable(parts.embedding, parts.w1, vocab_size,
+        parts.precompute = PrecomputeTable(std::move(embedding), std::move(w1), vocab_size,
                                            c.embed_dim, c.hidden, c.char_window, r,
                                            precision);
         parts.dict_cols.resize(fd * h);

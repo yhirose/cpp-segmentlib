@@ -52,6 +52,7 @@ using mlp::Vocab;
 // compile and silently give the CLI different behaviour from the library.
 const TrainOptions kTrainDefaults;
 const AdamConfig kAdamDefaults;
+const NetConfig kNetDefaults;
 const ed::train::EdlaConfig kEdlaDefaults;
 
 struct Options {
@@ -62,11 +63,12 @@ struct Options {
     std::string_view dev_corpus;  // full annotation; optional
     std::string_view model_out;
 
-    // MLP hyperparameters (design.ja.md 4.4 defaults).
-    std::uint32_t char_window = 5;
-    std::uint32_t embed_dim = 64;
-    std::uint32_t hidden = 256;
-    std::uint32_t min_count = 2;
+    // MLP hyperparameters (design.ja.md 4.4 defaults, owned by NetConfig and
+    // build_vocab).
+    std::uint32_t char_window = kNetDefaults.window;
+    std::uint32_t embed_dim = kNetDefaults.embed_dim;
+    std::uint32_t hidden = kNetDefaults.hidden;
+    std::uint32_t min_count = kDefaultMinCount;
     std::uint32_t epochs = kTrainDefaults.epochs;
     std::uint32_t batch_size = kTrainDefaults.batch_size;
     std::uint32_t patience = kTrainDefaults.patience;
@@ -318,7 +320,12 @@ bool prepare(const Options& opt, Prepared& out) {
 // Steps 4-5: quantize the trained parameters, report how many decisions that
 // cost, and write the model behind `header`.
 int finish(const Options& opt, const Prepared& p, const Parameters& params,
-           ComputeBackend& backend, std::string_view header) {
+           ComputeBackend& backend, const mlp::FormatId& format) {
+    if (!all_finite(params)) {
+        std::println(stderr, "train: the parameters diverged (NaN or infinity); "
+                             "try a smaller --lr");
+        return 1;
+    }
     const ExampleSet& calibration = p.have_dev ? p.dev_set : p.train_set;
     const QuantizedModel quantized = quantize(params, calibration, backend);
     const FlipCheck flips = check_sign_flips(params, quantized, calibration, backend);
@@ -327,7 +334,7 @@ int finish(const Options& opt, const Prepared& p, const Parameters& params,
                  flips.flips, flips.examples, flips.max_abs_y_flipped);
 
     const auto exported = export_model(std::filesystem::path(opt.model_out), quantized,
-                                       p.vocab, p.dictionaries, header);
+                                       p.vocab, p.dictionaries, format);
     if (!exported) {
         std::println(stderr, "train: {}: {}", opt.model_out, exported.error().message);
         return 1;
@@ -364,7 +371,7 @@ int run_train_mlp(const Options& opt) {
         p.config, p.train_set, p.have_dev ? &p.dev_set : nullptr, options, *backend);
     report_dev(p.have_dev, result.dev_metrics);
 
-    return finish(opt, p, result.params, *backend, mlp::train::kMlpHeader);
+    return finish(opt, p, result.params, *backend, mlp::kMlpFormat);
 }
 
 int run_train_ed(const Options& opt) {
@@ -396,8 +403,7 @@ int run_train_ed(const Options& opt) {
     std::println(stderr, "train: {}/{} hidden units pinned by the polarity split",
                  result.pinned_units, p.config.hidden);
 
-    return finish(opt, p, result.params, *backend,
-                  std::string(ed::kModelSignature) + "1");
+    return finish(opt, p, result.params, *backend, ed::kEdFormat);
 }
 
 }  // namespace

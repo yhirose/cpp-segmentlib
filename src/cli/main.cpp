@@ -24,7 +24,10 @@ int usage() {
 }  // namespace
 
 int main(int argc, char** argv) {
-    std::vector<std::string_view> args(argv + 1, argv + argc);
+    std::vector<std::string_view> args;
+    if (argc > 1) {  // argc may be 0 when launched with an empty argv
+        args.assign(argv + 1, argv + argc);
+    }
     if (args.empty()) {
         return usage();
     }

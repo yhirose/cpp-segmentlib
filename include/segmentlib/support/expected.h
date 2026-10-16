@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cassert>
 #include <optional>
 #include <type_traits>
 #include <utility>
@@ -57,21 +58,34 @@ public:
     }
     [[nodiscard]] explicit constexpr operator bool() const noexcept { return has_value(); }
 
-    [[nodiscard]] constexpr T& operator*() & noexcept { return std::get<0>(storage_); }
+    // Reading the wrong branch is a precondition violation (as with
+    // std::expected), asserted in debug builds. std::get here would throw out
+    // of a noexcept function, i.e. terminate.
+    [[nodiscard]] constexpr T& operator*() & noexcept {
+        assert(has_value());
+        return *std::get_if<0>(&storage_);
+    }
     [[nodiscard]] constexpr const T& operator*() const& noexcept {
-        return std::get<0>(storage_);
+        assert(has_value());
+        return *std::get_if<0>(&storage_);
     }
     [[nodiscard]] constexpr T&& operator*() && noexcept {
-        return std::move(std::get<0>(storage_));
+        assert(has_value());
+        return std::move(*std::get_if<0>(&storage_));
     }
 
-    [[nodiscard]] constexpr T* operator->() noexcept { return &std::get<0>(storage_); }
+    [[nodiscard]] constexpr T* operator->() noexcept {
+        assert(has_value());
+        return std::get_if<0>(&storage_);
+    }
     [[nodiscard]] constexpr const T* operator->() const noexcept {
-        return &std::get<0>(storage_);
+        assert(has_value());
+        return std::get_if<0>(&storage_);
     }
 
     [[nodiscard]] constexpr const E& error() const& noexcept {
-        return std::get<1>(storage_);
+        assert(!has_value());
+        return *std::get_if<1>(&storage_);
     }
 
 private:
@@ -96,7 +110,10 @@ public:
 
     constexpr void operator*() const noexcept {}
 
-    [[nodiscard]] constexpr const E& error() const& noexcept { return *error_; }
+    [[nodiscard]] constexpr const E& error() const& noexcept {
+        assert(!has_value());
+        return *error_;
+    }
 
 private:
     std::optional<E> error_;

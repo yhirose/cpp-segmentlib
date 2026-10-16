@@ -114,7 +114,8 @@ while IFS=$'\t' read -r name status conclusion; do
     continue
   fi
 
-  if [ "$conclusion" = "success" ]; then
+  if [ "$conclusion" = "success" ] || [ "$conclusion" = "skipped" ] ||
+     [ "$conclusion" = "neutral" ]; then
     echo "      [ OK ] $name"
   else
     echo "      [FAIL] $name ($conclusion)"
@@ -138,6 +139,13 @@ echo "    All CI checks passed."
 
 # --- Step 4: Determine the version to release ---
 if ! git rev-parse -q --verify "refs/tags/v$CURRENT_VERSION" >/dev/null; then
+  if [ "$FORCE_MAJOR" -eq 1 ] || [ "$FORCE_MINOR" -eq 1 ]; then
+    echo ""
+    echo "Error: v$CURRENT_VERSION is not tagged yet, so it is released as-is and"
+    echo "       --minor / --major have nothing to bump. Set the version by hand"
+    echo "       in $VERSION_HEADER and CMakeLists.txt, or drop the flag."
+    exit 1
+  fi
   # The version in the header has never been tagged: release it as-is.
   NEW_VERSION="$CURRENT_VERSION"
   echo ""
@@ -219,7 +227,7 @@ else
 
   echo ""
   echo "==> Pushing..."
-  git push && git push --tags
+  git push && git push origin "v$NEW_VERSION"
 
   echo ""
   echo "==> Released v$NEW_VERSION"

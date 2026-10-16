@@ -32,6 +32,10 @@ struct QuantizedModel {
     double b2 = 0.0;
 };
 
+// False if any parameter is NaN or infinite (a diverged run). Quantizing such
+// a model would silently produce garbage, so callers check this first.
+[[nodiscard]] bool all_finite(const Parameters& params);
+
 // Quantizes `params`. `calibration` supplies the first-layer activation
 // distribution for S_acc = pct99.99(|a|) / 2^22 (I.1); the dev set (or a
 // slice of it) is the intended input.

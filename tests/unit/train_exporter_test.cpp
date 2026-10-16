@@ -151,6 +151,28 @@ TEST_CASE("export_model writes the same bytes to a file") {
                              std::istreambuf_iterator<char>());
     REQUIRE(actual.size() == expected.size());
     CHECK(std::memcmp(actual.data(), expected.data(), actual.size()) == 0);
+    CHECK(!std::filesystem::exists(path.string() + ".tmp"));
+    std::filesystem::remove(path);
+}
+
+TEST_CASE("export_model leaves an existing model alone when it cannot write") {
+    const QuantizedModel q = tiny_model();
+    const Vocab vocab{{U'あ', U'い'}};
+    const std::vector<std::vector<std::string>> dicts = {{"かき"}};
+
+    const std::filesystem::path path = "segmentlib_export_keep_test.mlp";  // cwd
+    { std::ofstream(path, std::ios::binary) << "previous model"; }
+    // A directory in the way of the temporary file makes the write fail.
+    std::filesystem::create_directory(path.string() + ".tmp");
+
+    const auto result = export_model(path, q, vocab, dicts);
+    REQUIRE(!result.has_value());
+    CHECK(result.error().code == segmentlib::ErrorCode::IoError);
+
+    std::ifstream in(path, std::ios::binary);
+    std::string kept((std::istreambuf_iterator<char>(in)), std::istreambuf_iterator<char>());
+    CHECK(kept == "previous model");
+    std::filesystem::remove_all(path.string() + ".tmp");
     std::filesystem::remove(path);
 }
 

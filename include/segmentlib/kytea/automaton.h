@@ -433,4 +433,29 @@ private:
     std::uint8_t num_dicts_ = 0;
 };
 
+// Advances past a Dictionary<Entry> without materializing it: the same on-disk
+// layout Automaton::read parses, with `skip_entry(BinaryReader&)` stepping over
+// each payload. Used for the dictionaries a word-segmentation model carries but
+// does not need (selfDict, and those inside skipped tag models).
+template <class SkipEntry>
+void skip_automaton(bytes::BinaryReader& r, SkipEntry skip_entry) {
+    static_cast<void>(r.read<std::uint8_t>());  // numDicts
+    const auto n_states = r.read<std::uint32_t>();
+    if (n_states == 0) {
+        return;  // absent dictionary: no entries follow
+    }
+    for (std::uint32_t s = 0; s < n_states; ++s) {
+        static_cast<void>(r.read<std::uint32_t>());  // failure
+        const auto n_gotos = r.read<std::uint32_t>();
+        r.skip(std::size_t{n_gotos} * (sizeof(CharId) + sizeof(std::uint32_t)));
+        const auto n_out = r.read<std::uint32_t>();
+        r.skip(std::size_t{n_out} * sizeof(std::uint32_t));
+        static_cast<void>(r.read_bool());  // isBranch
+    }
+    const auto n_entries = r.read<std::uint32_t>();
+    for (std::uint32_t i = 0; i < n_entries; ++i) {
+        skip_entry(r);
+    }
+}
+
 }  // namespace segmentlib::kytea

@@ -1,7 +1,9 @@
 #include "mlp/train/exporter.h"
 
 #include <cassert>
+#include <filesystem>
 #include <fstream>
+#include <system_error>
 #include <span>
 
 #include "segmentlib/bytes/binary_writer.h"
@@ -24,7 +26,7 @@ void write_i16_tensor(bytes::BinaryWriter& out,
 std::vector<std::byte>
 serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
                 std::span<const std::vector<std::string>> dictionaries,
-                std::string_view header) {
+                const mlp::FormatId& format) {
     const NetConfig& c = quantized.config;
     assert(c.vocab_size == vocab.size());
     assert(c.num_dicts == dictionaries.size());
@@ -38,7 +40,7 @@ serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
     assert(quantized.b1.size() == c.hidden);
 
     bytes::BinaryWriter out;
-    out.write_line(std::string(header));
+    out.write_line(std::string(format.signature) + std::string(format.version));
 
     // Config (fields 1-4b). unicode_version records which Unicode data the
     // EGC splitter used at training time; the loader warns on mismatch.
@@ -88,16 +90,31 @@ std::expected<void, Error>
 export_model(const std::filesystem::path& path, const QuantizedModel& quantized,
              const Vocab& vocab,
              std::span<const std::vector<std::string>> dictionaries,
-             std::string_view header) {
+             const mlp::FormatId& format) {
     const std::vector<std::byte> bytes =
-        serialize_model(quantized, vocab, dictionaries, header);
-    std::ofstream out(path, std::ios::binary | std::ios::trunc);
-    if (!out) {
-        return std::unexpected(Error{ErrorCode::IoError, "cannot open model file for writing"});
+        serialize_model(quantized, vocab, dictionaries, format);
+    // Write beside the target and rename over it, so a failed write (a full
+    // disk, say) leaves any existing model intact instead of truncated.
+    std::filesystem::path tmp = path;
+    tmp += ".tmp";
+    {
+        std::ofstream out(tmp, std::ios::binary | std::ios::trunc);
+        if (!out) {
+            return std::unexpected(
+                Error{ErrorCode::IoError, "cannot open model file for writing"});
+        }
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+        out.close();  // flushes; the stream state below includes that failure
+        if (!out) {
+            std::filesystem::remove(tmp);
+            return std::unexpected(Error{ErrorCode::IoError, "cannot write model file"});
+        }
     }
-    out.write(reinterpret_cast<const char*>(bytes.data()),
-              static_cast<std::streamsize>(bytes.size()));
-    if (!out) {
+    std::error_code ec;
+    std::filesystem::rename(tmp, path, ec);
+    if (ec) {
+        std::filesystem::remove(tmp, ec);
         return std::unexpected(Error{ErrorCode::IoError, "cannot write model file"});
     }
     return {};
