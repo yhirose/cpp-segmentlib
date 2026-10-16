@@ -42,7 +42,9 @@ struct FormatId {
 
     // The first line of a file in this format, without the newline.
     [[nodiscard]] std::string header_line() const {
-        return std::string(signature) + std::string(version);
+        std::string line(signature);
+        line += version;
+        return line;
     }
 };
 

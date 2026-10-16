@@ -78,6 +78,15 @@ if [ -n "$(git status --porcelain)" ]; then
   exit 1
 fi
 
+# The branch must track a remote: the push at the end needs one, and finding
+# out after the commit and tag exist would leave them behind.
+BRANCH=$(git branch --show-current)
+REMOTE=$(git config "branch.$BRANCH.remote" || true)
+if [ -z "$BRANCH" ] || [ -z "$REMOTE" ]; then
+  echo "Error: the current branch has no upstream remote"
+  exit 1
+fi
+
 # --- Step 3: Check CI status of the latest commit ---
 echo ""
 echo "==> Checking CI status of the latest commit..."
@@ -227,7 +236,6 @@ else
 
   echo ""
   echo "==> Pushing..."
-  REMOTE=$(git config "branch.$(git branch --show-current).remote" || echo origin)
   git push && git push "$REMOTE" "v$NEW_VERSION"
 
   echo ""

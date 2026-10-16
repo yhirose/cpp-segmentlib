@@ -22,8 +22,9 @@ namespace segmentlib::mlp::train {
 // Serializes the model to the 5.7 byte layout, behind `format`'s header line
 // (mlp::kMlpFormat by default, ed::kEdFormat for the EDLA trainer). The body is
 // identical either way -- EDLA changes how the weights were learned, not what
-// the file has to record -- so only the first line tells the two apart. `vocab` must be the
-// vocabulary the model was trained with (quantized.config.vocab_size ==
+// the file has to record -- so only the first line tells the two apart.
+//
+// `vocab` must be the vocabulary the model was trained with (quantized.config.vocab_size ==
 // vocab.size()), and `dictionaries` the raw word lists of the training
 // dictionary channels, in channel order (dictionaries.size() ==
 // quantized.config.num_dicts). Words are written as their raw surface forms;
