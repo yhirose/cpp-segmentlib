@@ -20,7 +20,6 @@ int run_train(std::span<const std::string_view> /*args*/) {
 #else
 
 #include <cctype>
-#include <cerrno>
 #include <charconv>
 #include <cmath>
 #include <cstdint>
@@ -80,6 +79,7 @@ struct Options {
     // what makes a comparison between the two learning rules mean anything.
     std::string_view ed_embedding_update;
     bool ed_learn_feedback = false;
+    bool ed_feedback_given = false;  // --ed-feedback-decay / --ed-feedback-init
     float ed_feedback_decay = kEdlaDefaults.feedback_decay;
     float ed_feedback_init = kEdlaDefaults.feedback_init;
 
@@ -94,10 +94,9 @@ bool parse_number(std::string_view v, T& out) {
         // copy but has no such gate.
         const std::string s(v);
         char* end = nullptr;
-        errno = 0;
         out = std::strtof(s.c_str(), &end);
-        return end == s.c_str() + s.size() && !s.empty() && !std::isspace(static_cast<unsigned char>(s[0])) &&
-               errno != ERANGE && std::isfinite(out);
+        return end == s.c_str() + s.size() && !s.empty() &&
+               !std::isspace(static_cast<unsigned char>(s[0])) && std::isfinite(out);
     } else {
         const auto [ptr, ec] = std::from_chars(v.data(), v.data() + v.size(), out);
         return ec == std::errc{} && ptr == v.data() + v.size();
@@ -160,8 +159,10 @@ Options parse(std::span<const std::string_view> args) {
         } else if (a == "--ed-learn-feedback") {
             opt.ed_learn_feedback = true;
         } else if (a == "--ed-feedback-decay") {
+            opt.ed_feedback_given = true;
             number(opt.ed_feedback_decay);
         } else if (a == "--ed-feedback-init") {
+            opt.ed_feedback_given = true;
             number(opt.ed_feedback_init);
         } else {
             std::println(stderr, "train: unexpected argument '{}'", a);
@@ -199,8 +200,7 @@ Options parse(std::span<const std::string_view> args) {
         std::println(stderr, "train: --lr must be positive");
         opt.ok = false;
     }
-    if (opt.backend != "ed" && (opt.ed_feedback_decay != kEdlaDefaults.feedback_decay ||
-                                opt.ed_feedback_init != kEdlaDefaults.feedback_init)) {
+    if (opt.backend != "ed" && opt.ed_feedback_given) {
         std::println(stderr, "train: --ed-feedback-* apply to --backend ed");
         opt.ok = false;
     }

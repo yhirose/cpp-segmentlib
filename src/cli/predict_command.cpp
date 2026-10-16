@@ -149,7 +149,7 @@ int run_predict(std::span<const std::string_view> args) {
         std::println(stderr, "predict: error reading input");
         return 1;
     }
-    if (std::fflush(stdout) != 0 || std::ferror(stdout)) {
+    if (std::fflush(stdout) != 0) {
         std::println(stderr, "predict: error writing output");
         return 1;
     }

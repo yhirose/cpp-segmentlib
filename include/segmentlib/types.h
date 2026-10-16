@@ -1,9 +1,10 @@
 #pragma once
 
 // The library version, in the same two spellings cpp-httplib and cpp-peglib
-// use: a display string and a hex string ("0xMMmmpp"). Kept here because types.h is the dependency-free header every
-// other segmentlib header includes. Releases bump these together with the
-// VERSION in CMakeLists.txt's project() -- see docs/RELEASING.md.
+// use: a display string and a hex string ("0xMMmmpp"). Kept here because
+// types.h is the dependency-free header every other segmentlib header
+// includes. Releases bump these together with the VERSION in CMakeLists.txt's
+// project() -- see docs/RELEASING.md.
 #define SEGMENTLIB_VERSION "0.3.0"
 #define SEGMENTLIB_VERSION_NUM "0x000300"
 
