@@ -3,9 +3,12 @@
 #include <array>
 #include <cstdint>
 #include <memory>
+#include <stdexcept>
 #include <string>
+#include <string_view>
 #include <vector>
 
+#include "segmentlib/segmenter.h"
 #include "segmentlib/support/expected.h"
 #include "segmentlib/support/span.h"
 
@@ -143,4 +146,33 @@ TEST_CASE("as_bytes reinterprets a span as raw bytes") {
     // every call site in the library happens to pass a one-byte element type.
     std::array<std::uint32_t, 2> words{0, 0};
     CHECK(as_bytes(Span<const std::uint32_t>(words)).size() == 8);
+}
+
+TEST_CASE("run_batch keeps input order and rethrows a worker's exception") {
+    std::vector<std::string> storage;
+    for (int i = 0; i < 1000; ++i) {
+        storage.push_back(std::to_string(i));
+    }
+    const std::vector<std::string_view> texts(storage.begin(), storage.end());
+
+    for (const unsigned threads : {1u, 4u}) {
+        CAPTURE(threads);
+        const auto out = segmentlib::detail::run_batch<std::size_t>(
+            texts, threads, [](std::string_view t) -> Expected<std::size_t, Error> {
+                return t.size();
+            });
+        REQUIRE(out.size() == texts.size());
+        CHECK(*out[999] == 3);
+
+        // Before, a throw on a worker thread was std::terminate.
+        CHECK_THROWS_AS(segmentlib::detail::run_batch<std::size_t>(
+                            texts, threads,
+                            [](std::string_view t) -> Expected<std::size_t, Error> {
+                                if (t == "700") {
+                                    throw std::runtime_error("boom");
+                                }
+                                return t.size();
+                            }),
+                        std::runtime_error);
+    }
 }

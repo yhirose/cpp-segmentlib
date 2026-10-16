@@ -48,6 +48,11 @@ public:
 
     Automaton() = default;
 
+    // read()'s default payload check: accepts everything.
+    struct AcceptAnyPayload {
+        bool operator()(const Payload&, std::uint32_t) const noexcept { return true; }
+    };
+
     // Parses a Dictionary<Entry> from `r`. `read_payload(BinaryReader&)` reads
     // one entry. A dictionary written as "absent" (zero states) yields an empty
     // automaton, and — matching KyTea's on-disk form — no entry count follows,
@@ -58,11 +63,18 @@ public:
     // `new_id` and `payloads_` with these values directly, so an unchecked one
     // is an out-of-bounds write at an attacker-chosen offset, not a wrong
     // answer; the checks below are what makes a malformed model a rejected
-    // model. One structural check cannot be made here — that every state is
-    // reachable from the root — and lives in build_canonical, whose DFS
-    // already establishes reachability as a side effect.
-    template <class ReadPayload>
-    static Automaton read(bytes::BinaryReader& r, ReadPayload read_payload) {
+    // model. The structural checks cannot be made here — that the goto graph
+    // is a tree reaching every state, and that every failure link points at a
+    // strictly shallower state (otherwise match() never terminates) — and live
+    // in build_canonical, whose DFS establishes each state's depth anyway.
+    //
+    // `check_payload(const Payload&, depth)` is called for every output of
+    // every state, with that state's depth (the length of the string it
+    // accepts), and returns false to reject the file. It is where a caller
+    // validates what its matcher callback will assume of a payload.
+    template <class ReadPayload, class CheckPayload = AcceptAnyPayload>
+    static Automaton read(bytes::BinaryReader& r, ReadPayload read_payload,
+                          CheckPayload check_payload = {}) {
         Automaton a;
         a.num_dicts_ = r.read<std::uint8_t>();
         const auto n_states = r.read<std::uint32_t>();
@@ -122,7 +134,14 @@ public:
         for (std::uint32_t i = 0; i < n_entries; ++i) {
             a.payloads_.push_back(read_payload(r));
         }
-        a.build(temp);
+        const std::vector<std::uint32_t> depth = a.build(temp);
+        for (std::size_t s = 0; s < temp.size(); ++s) {
+            for (const std::uint32_t o : temp[s].outputs) {
+                if (!check_payload(a.payloads_[o], depth[s])) {
+                    throw bytes::ParseError("automaton payload inconsistent with its state");
+                }
+            }
+        }
         return a;
     }
 
@@ -248,12 +267,13 @@ private:
         return c < root_next_.size() ? root_next_[c] : kNoState;
     }
 
-    void build(std::vector<TempState>& temp) {
+    // Returns each state's depth, indexed by its on-disk id.
+    std::vector<std::uint32_t> build(std::vector<TempState>& temp) {
         num_states_ = temp.size();
         if (num_states_ == 0) {
-            return;
+            return {};
         }
-        build_canonical(temp);
+        return build_canonical(temp);
     }
 
     // Builds the canonical double-array: each state is renamed to the slot it
@@ -264,10 +284,12 @@ private:
     // processed (parent before child), and, by keeping each subtree's nodes
     // contiguous, keeps the free-list frontier local so the base search stays
     // cheap (BFS order scatters siblings and multiplies collisions ~5x). Failure
-    // links and outputs are then remapped into the new ids.
-    void build_canonical(std::vector<TempState>& temp) {
+    // links and outputs are then remapped into the new ids. Returns each
+    // state's depth, indexed by its on-disk id.
+    std::vector<std::uint32_t> build_canonical(std::vector<TempState>& temp) {
         const std::size_t n = num_states_;
         std::vector<std::uint32_t> new_id(n, kNull);
+        std::vector<std::uint32_t> depth(n, 0);
 
         std::vector<std::uint32_t> free_next;
         std::vector<std::uint32_t> free_prev;
@@ -377,9 +399,16 @@ private:
                 if (slot >= unit_.size()) {
                     grow(slot + 1);
                 }
+                // A state named by a second goto (or the root named by any)
+                // would be renamed and re-pushed forever: the graph must be a
+                // tree.
+                if (new_id[child_old] != kNull) {
+                    throw bytes::ParseError("automaton goto graph is not a tree");
+                }
                 unlink(static_cast<std::uint32_t>(slot));
                 unit_[slot].check = ns;  // base stays 0 until the child is processed
                 new_id[child_old] = static_cast<std::uint32_t>(slot);
+                depth[child_old] = depth[old_s] + 1;
                 stack.push_back(child_old);
             }
             enforce_cap();
@@ -393,6 +422,15 @@ private:
         for (const auto id : new_id) {
             if (id == kNull) {
                 throw bytes::ParseError("automaton has a state unreachable from the root");
+            }
+        }
+        // match() follows failure links until a transition succeeds or the root
+        // is reached; that terminates only if every link strictly shortens the
+        // match, as a real Aho-Corasick failure link (a proper suffix) does.
+        // The root's own link is never followed.
+        for (std::size_t s = 1; s < n; ++s) {
+            if (depth[temp[s].failure] >= depth[s]) {
+                throw bytes::ParseError("automaton failure link does not shorten the match");
             }
         }
 
@@ -428,6 +466,7 @@ private:
                 root_next_[c] = new_id[child_old];
             }
         }
+        return depth;
     }
 
     std::size_t num_states_ = 0;  // logical state count (units may exceed it)

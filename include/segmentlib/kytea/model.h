@@ -3,8 +3,10 @@
 #include <cstddef>
 #include <cstdint>
 #include <filesystem>
-#include <fstream>
 #include <functional>
+#include <limits>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -13,6 +15,7 @@
 #include "segmentlib/kytea/automaton.h"
 #include "segmentlib/kytea/char_table.h"
 #include "segmentlib/support/expected.h"
+#include "segmentlib/support/file.h"
 #include "segmentlib/support/span.h"
 #include "segmentlib/types.h"
 
@@ -227,27 +230,20 @@ public:
             return Model(parse(r));
         } catch (const bytes::ParseError&) {
             return Unexpected(Error{ErrorCode::MalformedModel, "malformed KyTea model"});
+        } catch (const std::bad_alloc&) {
+            // A count the file declares can still be too large to allocate.
+            return Unexpected(Error{ErrorCode::MalformedModel, "KyTea model too large to load"});
+        } catch (const std::length_error&) {
+            return Unexpected(Error{ErrorCode::MalformedModel, "KyTea model too large to load"});
         }
     }
 
     static Expected<Model, Error> load(const std::filesystem::path& path) {
-        std::ifstream in(path, std::ios::binary);
-        if (!in) {
-            return Unexpected(Error{ErrorCode::IoError, "could not open model file"});
+        auto buf = segmentlib::detail::read_model_file(path);
+        if (!buf) {
+            return Unexpected(buf.error());
         }
-        std::vector<std::byte> buf;
-        in.seekg(0, std::ios::end);
-        const auto size = in.tellg();
-        if (size < 0) {
-            return Unexpected(Error{ErrorCode::IoError, "could not read model file"});
-        }
-        buf.resize(static_cast<std::size_t>(size));
-        in.seekg(0, std::ios::beg);
-        in.read(reinterpret_cast<char*>(buf.data()), static_cast<std::streamsize>(buf.size()));
-        if (!in) {
-            return Unexpected(Error{ErrorCode::IoError, "could not read model file"});
-        }
-        return load_from_bytes(buf);
+        return load_from_bytes(*buf);
     }
 
     [[nodiscard]] const Config& config() const noexcept { return parts_.config; }
@@ -295,7 +291,11 @@ private:
         Config cfg;
         cfg.do_ws = r.read_bool();
         cfg.do_tags = r.read_bool();
-        cfg.num_tags = static_cast<int>(r.read<std::uint32_t>());
+        const auto num_tags_raw = r.read<std::uint32_t>();
+        if (num_tags_raw > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
+            throw ParseError("implausible tag level count");
+        }
+        cfg.num_tags = static_cast<int>(num_tags_raw);
         cfg.char_window = r.read<std::uint8_t>();
         cfg.char_n = r.read<std::uint8_t>();
         cfg.type_window = r.read<std::uint8_t>();
@@ -322,8 +322,17 @@ private:
         if (r.read<std::uint8_t>() == 0) {
             throw ParseError("word-segmentation model has no feature lookup");
         }
-        Automaton<FeatVec> char_dict = Automaton<FeatVec>::read(r, read_featvec);
-        Automaton<FeatVec> type_dict = Automaton<FeatVec>::read(r, read_featvec);
+        // add_ngram_scores reads up to 2*window weights from every n-gram
+        // vector, one per boundary in the window.
+        const auto window_check = [](std::size_t window) {
+            return [need = 2 * window](const FeatVec& v, std::uint32_t) {
+                return v.size() >= need;
+            };
+        };
+        Automaton<FeatVec> char_dict =
+            Automaton<FeatVec>::read(r, read_featvec, window_check(cfg.char_window));
+        Automaton<FeatVec> type_dict =
+            Automaton<FeatVec>::read(r, read_featvec, window_check(cfg.type_window));
         skip_dictionary(r, skip_featvec);  // selfDict
         FeatVec dict_vector = read_featvec(r);
         FeatVec biases = read_featvec(r);
@@ -341,10 +350,26 @@ private:
 
         // --- word dictionary (needed for the D features) ---
         const int num_tags = cfg.num_tags;
-        Automaton<WordEntry> word_dict =
-            Automaton<WordEntry>::read(r, [num_tags](bytes::BinaryReader& rr) {
-                return read_word_entry(rr, num_tags);
+        // add_dictionary_scores indexes the boundaries of a word by its
+        // char_length back from the match end, so the length must be that of a
+        // string the matching state can actually have consumed: at least 1 and
+        // at most the state's depth.
+        Automaton<WordEntry> word_dict = Automaton<WordEntry>::read(
+            r,
+            [num_tags](bytes::BinaryReader& rr) { return read_word_entry(rr, num_tags); },
+            [](const WordEntry& e, std::uint32_t depth) {
+                return e.char_length >= 1 && e.char_length <= depth;
             });
+        // add_dictionary_scores' other assumptions: in_dict is an 8-bit mask,
+        // so at most 8 sub-dictionaries; a positive length cap; and a weight
+        // for every (sub-dictionary, label length, L/I/R) it can index.
+        if (!word_dict.empty() && !dict_vector.empty()) {
+            const std::size_t num_dicts = word_dict.num_dicts();
+            if (num_dicts > 8 || cfg.dict_n == 0 ||
+                dict_vector.size() < num_dicts * 3 * cfg.dict_n) {
+                throw ParseError("dictionary feature vector inconsistent with the dictionary");
+            }
+        }
 
         // --- subword dictionary (ProbTagEntry) + per-level reading LMs, skipped ---
         skip_dictionary(r, [num_tags](bytes::BinaryReader& rr) {

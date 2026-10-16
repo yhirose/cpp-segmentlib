@@ -5,8 +5,8 @@
 #include <cstdint>
 #include <cstdio>
 #include <filesystem>
-#include <fstream>
-#include <iterator>
+#include <new>
+#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -17,6 +17,7 @@
 #include "segmentlib/mlp/precompute.h"
 #include "segmentlib/mlp/vocab.h"
 #include "segmentlib/support/expected.h"
+#include "segmentlib/support/file.h"
 #include "segmentlib/support/span.h"
 #include "segmentlib/types.h"
 #include "segmentlib/unicode/egc.h"
@@ -128,22 +129,23 @@ public:
             return Model(parse(in, precision));
         } catch (const bytes::ParseError&) {
             return Unexpected(Error{ErrorCode::MalformedModel, format.malformed});
+        } catch (const std::bad_alloc&) {
+            // The precompute table is V × 2w × H, sized from header fields, so a
+            // small file can still ask for more than can be allocated.
+            return Unexpected(Error{ErrorCode::MalformedModel, "model too large to load"});
+        } catch (const std::length_error&) {
+            return Unexpected(Error{ErrorCode::MalformedModel, "model too large to load"});
         }
     }
 
     [[nodiscard]] static Expected<Model, Error> load_format(
         const std::filesystem::path& path, const FormatId& format,
         TablePrecision precision) {
-        std::ifstream in(path, std::ios::binary);
-        if (!in) {
-            return Unexpected(Error{ErrorCode::IoError, "cannot open model file"});
+        auto data = segmentlib::detail::read_model_file(path);
+        if (!data) {
+            return Unexpected(data.error());
         }
-        std::vector<char> data((std::istreambuf_iterator<char>(in)),
-                               std::istreambuf_iterator<char>());
-        if (in.bad()) {
-            return Unexpected(Error{ErrorCode::IoError, "cannot read model file"});
-        }
-        return load_format(as_bytes(Span<const char>(data)), format, precision);
+        return load_format(Span<const std::byte>(*data), format, precision);
     }
 
     [[nodiscard]] TablePrecision table_precision() const noexcept {
@@ -290,6 +292,19 @@ private:
         }
         parts.w2 = detail::read_i16_tensor(in, h);
         const double b2 = in.read<double>();
+        // The biases enter the integer accumulators through llround, whose
+        // result is unspecified for a non-finite or out-of-range argument.
+        // b1 must fit the int32 accumulator; b2 is added to an int64 output
+        // dot of at most H·2^15·2^31 ≤ 2^62 in magnitude, so |b2_q| ≤ 2^62
+        // keeps that sum from overflowing.
+        for (const double b : b1) {
+            if (!(std::fabs(b / acc_scale) <= 2147483647.0)) {
+                throw ParseError("first-layer bias out of range");
+            }
+        }
+        if (!(std::fabs(b2 / (w2_scale * acc_scale)) <= 4611686018427387904.0)) {
+            throw ParseError("output bias out of range");
+        }
 
         // Dictionaries (field 17): the compiled matcher, ready to use.
         CompiledDictionaries compiled;

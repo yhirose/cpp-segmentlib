@@ -97,3 +97,28 @@ TEST_CASE("training without a dev set returns the final parameters") {
     CHECK(result.epoch_losses.size() == 3);
     CHECK(!result.params.embedding.empty());
 }
+
+TEST_CASE("zero epochs with a dev set returns the initial parameters") {
+    // Nothing is evaluated, so nothing is captured as "best"; the result must
+    // still carry parameters rather than an empty set that quantize reads
+    // through a null pointer.
+    const auto sentences = parse_full_corpus("あい うえ\nうえ あい");
+    REQUIRE(sentences.has_value());
+    const Vocab vocab = build_vocab(*sentences, 1);
+    const ExampleSet set = build_examples(*sentences, vocab, {}, 1, nullptr);
+
+    NetConfig config;
+    config.window = 1;
+    config.embed_dim = 4;
+    config.hidden = 8;
+    config.vocab_size = vocab.size();
+
+    TrainOptions options;
+    options.epochs = 0;
+
+    const auto backend = make_cpu_backend();
+    const TrainResult result = train(config, set, &set, options, *backend);
+    CHECK(result.epochs_run == 0);
+    CHECK(result.params.embedding.size() ==
+          static_cast<std::size_t>(vocab.size()) * config.embed_dim);
+}

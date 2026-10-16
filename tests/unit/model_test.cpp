@@ -42,11 +42,44 @@ struct Writer {
     }
 };
 
+// Writes a one-entry dictionary: root --c--> state 1, which outputs the entry.
+template <class PutPayload>
+void put_one_entry_dict(Writer& w, std::uint8_t num_dicts, std::uint16_t c,
+                        PutPayload put_payload) {
+    w.put_u8(num_dicts);
+    w.put<std::uint32_t>(2);  // numStates
+    w.put<std::uint32_t>(0);  // root: failure
+    w.put<std::uint32_t>(1);  // 1 goto
+    w.put<std::uint16_t>(c);
+    w.put<std::uint32_t>(1);
+    w.put<std::uint32_t>(0);  // 0 outputs
+    w.put_u8(0);
+    w.put<std::uint32_t>(0);  // state 1: failure -> root
+    w.put<std::uint32_t>(0);  // 0 gotos
+    w.put<std::uint32_t>(1);  // 1 output
+    w.put<std::uint32_t>(0);  // -> entry 0
+    w.put_u8(1);
+    w.put<std::uint32_t>(1);  // 1 entry
+    put_payload();
+}
+
+// Optional non-empty dictionaries for build_min_model, each a single entry
+// on the one-character string {1}.
+struct Extras {
+    // Char n-gram dictionary entry's weight vector; absent if empty.
+    std::vector<std::int16_t> char_ngram;
+    // Word dictionary entry; absent if word_dicts == 0.
+    std::uint8_t word_dicts = 0;
+    std::uint32_t word_length = 1;
+    std::uint8_t dict_n = 4;
+};
+
 // A complete but minimal binary model: doWS, numTags=0, empty char/type/self
-// dictionaries, and an empty word dictionary.
+// dictionaries, and an empty word dictionary (unless `extras` adds some).
 std::vector<std::byte> build_min_model(double multiplier,
                                        std::span<const std::int16_t> dict_vector,
-                                       std::span<const std::int16_t> biases) {
+                                       std::span<const std::int16_t> biases,
+                                       const Extras& extras = {}) {
     Writer w;
     w.bytes.reserve(64);
     // header
@@ -62,7 +95,7 @@ std::vector<std::byte> build_min_model(double multiplier,
     w.put_u8(3);              // charN
     w.put_u8(3);              // typeWindow
     w.put_u8(3);              // typeN
-    w.put_u8(4);              // dictN
+    w.put_u8(extras.dict_n);  // dictN
     w.put_u8(0);              // bias flag
     w.put_f64(0.0);           // epsilon
     w.put_u8(5);              // solver
@@ -78,7 +111,11 @@ std::vector<std::byte> build_min_model(double multiplier,
 
     // FeatureLookup
     w.put_u8(1);              // active
-    w.put_empty_dict();       // charDict
+    if (extras.char_ngram.empty()) {
+        w.put_empty_dict();   // charDict
+    } else {
+        put_one_entry_dict(w, 0, 1, [&] { w.put_featvec(extras.char_ngram); });
+    }
     w.put_empty_dict();       // typeDict
     w.put_empty_dict();       // selfDict
     w.put_featvec(dict_vector);
@@ -88,8 +125,18 @@ std::vector<std::byte> build_min_model(double multiplier,
 
     // numTags == 0 -> no global tag models
 
-    // word dictionary (empty)
-    w.put_empty_dict();
+    // word dictionary
+    if (extras.word_dicts == 0) {
+        w.put_empty_dict();
+    } else {
+        put_one_entry_dict(w, extras.word_dicts, 1, [&] {
+            w.put<std::uint32_t>(extras.word_length);
+            for (std::uint32_t i = 0; i < extras.word_length; ++i) {
+                w.put<std::uint16_t>(1);
+            }
+            w.put_u8(1);  // in_dict: sub-dictionary 0
+        });
+    }
 
     // subword dictionary (empty); numTags == 0 -> no reading language models
     w.put_empty_dict();
@@ -143,4 +190,60 @@ TEST_CASE("Model rejects a truncated model") {
     auto model = Model::load_from_bytes(bytes);
     REQUIRE_FALSE(model.has_value());
     CHECK(model.error().code == ErrorCode::MalformedModel);
+}
+
+TEST_CASE("Model rejects dictionaries the scorer would index out of bounds") {
+    const std::vector<std::int16_t> bs{0};
+    const auto load = [&](std::span<const std::int16_t> dv, const Extras& x) {
+        return Model::load_from_bytes(build_min_model(1.0, dv, bs, x));
+    };
+    const std::vector<std::int16_t> dv12(12, 1);  // 1 dict x 3 x dictN 4
+
+    SUBCASE("well-formed dictionaries load") {
+        Extras x;
+        x.char_ngram.assign(6, 1);  // 2 x charWindow 3
+        x.word_dicts = 1;
+        CHECK(load(dv12, x).has_value());
+    }
+    SUBCASE("n-gram vector shorter than the window") {
+        Extras x;
+        x.char_ngram.assign(1, 1);
+        CHECK(!load(dv12, x).has_value());
+    }
+    SUBCASE("word length zero") {
+        Extras x;
+        x.word_dicts = 1;
+        x.word_length = 0;
+        CHECK(!load(dv12, x).has_value());
+    }
+    SUBCASE("word longer than its state's depth") {
+        Extras x;
+        x.word_dicts = 1;
+        x.word_length = 1000;
+        CHECK(!load(dv12, x).has_value());
+    }
+    SUBCASE("dictionary vector shorter than numDicts x 3 x dictN") {
+        Extras x;
+        x.word_dicts = 1;
+        const std::vector<std::int16_t> dv1{1};
+        CHECK(!load(dv1, x).has_value());
+    }
+    SUBCASE("dictN of zero") {
+        Extras x;
+        x.word_dicts = 1;
+        x.dict_n = 0;
+        CHECK(!load(dv12, x).has_value());
+    }
+    SUBCASE("more sub-dictionaries than the 8-bit in_dict mask holds") {
+        Extras x;
+        x.word_dicts = 40;
+        const std::vector<std::int16_t> dv(40 * 12, 1);
+        CHECK(!load(dv, x).has_value());
+    }
+}
+
+TEST_CASE("Model::load reports a directory as an I/O error") {
+    auto model = Model::load(".");
+    REQUIRE_FALSE(model.has_value());
+    CHECK(model.error().code == ErrorCode::IoError);
 }

@@ -1,7 +1,9 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <span>
+#include <utility>
 #include <vector>
 
 #include "segmentlib/bytes/binary_reader.h"
@@ -294,6 +296,7 @@ namespace {
 // well-formed; each SUBCASE below corrupts exactly one member.
 struct Fixture {
     std::uint32_t root_failure = 0;
+    std::uint32_t leaf_failure = 0;
     std::uint32_t leaf_output = 0;
     std::vector<std::pair<CharId, std::uint32_t>> root_gotos{{2, 1}};
     // States written after state 1 and counted in the header, but named by no
@@ -317,7 +320,7 @@ std::vector<std::byte> build_fixture(const Fixture& c) {
     w.put_u8(0);
 
     // state 1 (leaf)
-    w.put<std::uint32_t>(0);  // failure -> root
+    w.put<std::uint32_t>(c.leaf_failure);
     w.put<std::uint32_t>(0);  // 0 gotos
     w.put<std::uint32_t>(1);  // 1 output
     w.put<std::uint32_t>(c.leaf_output);
@@ -375,6 +378,24 @@ TEST_CASE("malformed automata are rejected, not built") {
         c.root_gotos = {{2, 1}, {2, 1}};
         CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
     }
+    SUBCASE("goto back to the root") {
+        // Not a tree: the root would be renamed and re-pushed forever.
+        Fixture c;
+        c.root_gotos = {{2, 1}, {5, 0}};
+        CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
+    }
+    SUBCASE("state named by two gotos") {
+        Fixture c;
+        c.root_gotos = {{2, 1}, {5, 1}};
+        CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
+    }
+    SUBCASE("failure link that does not shorten the match") {
+        // A self-loop: match() would follow it forever on a character the
+        // state has no goto for.
+        Fixture c;
+        c.leaf_failure = 1;
+        CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
+    }
     SUBCASE("state unreachable from the root") {
         // State 2 is declared and written but named by no goto, so it keeps
         // new_id == kNull and the remap would index fail_ at 2^32-1.
@@ -382,4 +403,27 @@ TEST_CASE("malformed automata are rejected, not built") {
         c.extra_states = 1;
         CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
     }
+}
+
+TEST_CASE("the payload check sees each output with its state's depth") {
+    // build_automaton: "5" (depth 1) outputs entry 100, "7" (depth 1) entry
+    // 101, "57" (depth 2) entries 102 and 101.
+    const auto bytes = build_automaton();
+    const auto read_with = [&](auto check) {
+        std::span<const std::byte> sp(bytes);
+        BinaryReader r(sp);
+        return Automaton<int>::read(
+            r, [](BinaryReader& rr) { return static_cast<int>(rr.read<std::uint32_t>()); },
+            check);
+    };
+    std::vector<std::pair<int, std::uint32_t>> seen;
+    read_with([&](const int& p, std::uint32_t depth) {
+        seen.emplace_back(p, depth);
+        return true;
+    });
+    std::sort(seen.begin(), seen.end());
+    CHECK(seen == std::vector<std::pair<int, std::uint32_t>>{
+                      {100, 1}, {101, 1}, {101, 2}, {102, 2}});
+    CHECK_THROWS_AS(read_with([](const int& p, std::uint32_t) { return p != 102; }),
+                    ParseError);
 }

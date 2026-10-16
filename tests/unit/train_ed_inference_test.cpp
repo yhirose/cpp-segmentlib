@@ -165,6 +165,13 @@ TEST_CASE("the EDLA trainer honours epochs, patience and the polarity split") {
     CHECK(again.epochs_run == stopped.epochs_run);
     CHECK(again.dev_metrics.f1 == stopped.dev_metrics.f1);
     CHECK(again.params.w2 == stopped.params.w2);
+
+    // Zero epochs with a dev set evaluates nothing; the initial parameters
+    // are still the result.
+    options.epochs = 0;
+    const edt::TrainResult none = edt::train(config, set, &set, options, *backend);
+    CHECK(none.epochs_run == 0);
+    CHECK(!none.params.embedding.empty());
 }
 
 TEST_CASE("an EDLA model round-trips through Segmenter::load") {

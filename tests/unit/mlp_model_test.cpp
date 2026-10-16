@@ -2,6 +2,7 @@
 
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <cstring>
 #include <span>
 #include <vector>
@@ -32,7 +33,14 @@ namespace {
 //
 // Derived (I.1): b1_q = 500, b2_q = -1000, table[row][j] = w1_q[j]·emb_q[row],
 // dict_col[5] = llround(2·10) = 20.
-std::vector<std::byte> tiny_model_bytes() {
+// Overrides for building a broken variant of the tiny model.
+struct TinyOverrides {
+    double b1 = 0.5;
+    double b2 = -1.0;
+    bool corrupt_fst_body = false;  // flip a byte the FST's body hash covers
+};
+
+std::vector<std::byte> tiny_model_bytes(const TinyOverrides& o = {}) {
     bytes::BinaryWriter out;
     out.write_line("SegmentLibMLP 1");
     out.write<std::uint8_t>(2);    // w
@@ -56,11 +64,15 @@ std::vector<std::byte> tiny_model_bytes() {
     for (std::size_t k = 0; k < 12; ++k) {  // W_dict H×12
         out.write<std::int16_t>(k == 5 ? 10 : 0);
     }
-    out.write<double>(0.5);       // b1
+    out.write<double>(o.b1);      // b1
     out.write<std::int16_t>(5);   // w2
-    out.write<double>(-1.0);      // b2
+    out.write<double>(o.b2);      // b2
     const std::vector<std::vector<std::string>> dicts = {{"ああ"}};
-    write_compiled_dictionaries(out, compile_dictionaries(dicts));
+    auto compiled = compile_dictionaries(dicts);
+    if (o.corrupt_fst_body) {
+        compiled.fst[0] = static_cast<char>(compiled.fst[0] ^ 0x5A);
+    }
+    write_compiled_dictionaries(out, compiled);
     return out.take();
 }
 
@@ -204,6 +216,9 @@ TEST_CASE("Int16 mode derives the requantized quantities via requant_i16") {
     CHECK(requant_i16(-200) == 0);
     CHECK(requant_i16(1 << 30) == 32767);    // saturates high
     CHECK(requant_i16(-(1 << 30)) == -32768);  // saturates low
+    // The rounding add must not overflow int32 at the top of the range.
+    CHECK(requant_i16(std::numeric_limits<std::int32_t>::max()) == 32767);
+    CHECK(requant_i16(std::numeric_limits<std::int32_t>::min()) == -32768);
 
     // The int16 scorer runs end to end on this model (decisions are not
     // asserted: an uncalibrated acc_scale makes the coarse unit meaningless;
@@ -303,4 +318,30 @@ TEST_CASE("load rejects an unparsable dictionary FST") {
     const auto model = Model::load_from_bytes(bytes);
     REQUIRE(!model.has_value());
     CHECK(model.error().code == ErrorCode::MalformedModel);
+}
+
+TEST_CASE("load rejects biases the integer accumulators cannot hold") {
+    const auto loads = [](const TinyOverrides& o) {
+        const auto bytes = tiny_model_bytes(o);
+        return Model::load_from_bytes(bytes).has_value();
+    };
+    CHECK(loads({}));
+    CHECK(!loads({.b1 = std::numeric_limits<double>::quiet_NaN()}));
+    CHECK(!loads({.b1 = std::numeric_limits<double>::infinity()}));
+    CHECK(!loads({.b1 = 2147483600.0 * 0.001 * 2}));  // b1 / acc_scale > INT32_MAX
+    CHECK(!loads({.b2 = std::numeric_limits<double>::quiet_NaN()}));
+    CHECK(!loads({.b2 = 1e30}));
+}
+
+TEST_CASE("load rejects a dictionary FST whose body fails its hash") {
+    const auto bytes = tiny_model_bytes({.corrupt_fst_body = true});
+    const auto model = Model::load_from_bytes(bytes);
+    REQUIRE(!model.has_value());
+    CHECK(model.error().code == ErrorCode::MalformedModel);
+}
+
+TEST_CASE("load reports a directory as an I/O error") {
+    const auto model = Model::load(".");
+    REQUIRE(!model.has_value());
+    CHECK(model.error().code == ErrorCode::IoError);
 }

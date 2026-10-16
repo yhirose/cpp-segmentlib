@@ -66,7 +66,8 @@ jobs:
   # ASan + UBSan. The parsers are hand-written over untrusted model bytes, the
   # kernels do unaligned SIMD pointer arithmetic, and the batch path is a
   # lock-free atomic cursor — all of which the Release-only matrix above cannot
-  # see. This job is also the only one that builds with assertions enabled.
+  # see. This job is also the only one that builds with assertions enabled:
+  # CMake's RelWithDebInfo flags carry -DNDEBUG, so they are replaced here.
   sanitizers:
     name: Linux x86_64 (ASan + UBSan)
     runs-on: ubuntu-24.04
@@ -80,6 +81,7 @@ jobs:
         run: >
           cmake -S . -B build -G Ninja
           -DCMAKE_BUILD_TYPE=RelWithDebInfo
+          -DCMAKE_CXX_FLAGS_RELWITHDEBINFO="-O2 -g"
           -DCMAKE_CXX_COMPILER=g++-14
           -DSEGMENTLIB_BUILD_TRAINING=ON
           -DSEGMENTLIB_BUILD_BENCH=OFF

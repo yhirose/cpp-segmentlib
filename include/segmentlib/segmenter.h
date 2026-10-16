@@ -3,9 +3,11 @@
 #include <algorithm>
 #include <atomic>
 #include <cstddef>
+#include <exception>
 #include <filesystem>
 #include <fstream>
 #include <string>
+#include <mutex>
 #include <string_view>
 #include <thread>
 #include <utility>
@@ -32,6 +34,13 @@ namespace detail {
 // lengths; the chunk amortizes the atomic). Each thread writes disjoint result
 // slots, and the per-item functions are re-entrant (the model is immutable, its
 // scratch buffers are thread_local), so no locking is needed.
+//
+// An exception from `fn` (std::bad_alloc, say) reaches the caller whatever the
+// thread count: a worker that catches one stops handing out work, every thread
+// is joined, and the first exception is rethrown. Letting it escape a thread
+// (or unwinding past unjoined threads) would call std::terminate instead. A
+// thread that cannot be started is not an error either: the threads that did
+// start, the calling thread among them, share the work.
 template <class Result, class Fn>
 std::vector<Expected<Result, Error>> run_batch(Span<const std::string_view> texts,
                                                unsigned threads, Fn fn) {
@@ -54,28 +63,46 @@ std::vector<Expected<Result, Error>> run_batch(Span<const std::string_view> text
     }
 
     std::atomic<std::size_t> cursor{0};
+    std::mutex failure_mutex;
+    std::exception_ptr failure;
     constexpr std::size_t kChunk = 64;
-    const auto worker = [&] {
-        for (;;) {
-            const std::size_t start = cursor.fetch_add(kChunk, std::memory_order_relaxed);
-            if (start >= texts.size()) {
-                break;
+    const auto worker = [&]() noexcept {
+        try {
+            for (;;) {
+                const std::size_t start =
+                    cursor.fetch_add(kChunk, std::memory_order_relaxed);
+                if (start >= texts.size()) {
+                    break;
+                }
+                const std::size_t end = std::min(start + kChunk, texts.size());
+                for (std::size_t i = start; i < end; ++i) {
+                    out[i] = fn(texts[i]);
+                }
             }
-            const std::size_t end = std::min(start + kChunk, texts.size());
-            for (std::size_t i = start; i < end; ++i) {
-                out[i] = fn(texts[i]);
+        } catch (...) {
+            cursor.store(texts.size(), std::memory_order_relaxed);  // stop the others
+            const std::lock_guard<std::mutex> lock(failure_mutex);
+            if (!failure) {
+                failure = std::current_exception();
             }
         }
     };
 
     std::vector<std::thread> pool;
-    pool.reserve(n - 1);
-    for (unsigned t = 0; t + 1 < n; ++t) {
-        pool.emplace_back(worker);
+    try {
+        pool.reserve(n - 1);
+        for (unsigned t = 0; t + 1 < n; ++t) {
+            pool.emplace_back(worker);
+        }
+    } catch (...) {
+        // Out of threads (std::system_error) or memory: run with those started.
     }
     worker();  // the calling thread participates too
     for (auto& th : pool) {
         th.join();
+    }
+    if (failure) {
+        std::rethrow_exception(failure);
     }
     return out;
 }
@@ -132,29 +159,17 @@ public:
 
     // Loads a model, forcing the KyTea backend.
     static Expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path) {
-        auto model = kytea::Model::load(model_path);
-        if (!model) {
-            return Unexpected(model.error());
-        }
-        return Segmenter(kytea::KyteaBackend(std::move(*model)));
+        return from_model<kytea::KyteaBackend>(kytea::Model::load(model_path));
     }
 
     // Loads a model, forcing the MLP backend.
     static Expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path) {
-        auto model = mlp::Model::load(model_path);
-        if (!model) {
-            return Unexpected(model.error());
-        }
-        return Segmenter(mlp::MlpBackend(std::move(*model)));
+        return from_model<mlp::MlpBackend>(mlp::Model::load(model_path));
     }
 
     // Loads a model, forcing the EDLA backend.
     static Expected<Segmenter, Error> load_ed(const std::filesystem::path& model_path) {
-        auto model = ed::Model::load(model_path);
-        if (!model) {
-            return Unexpected(model.error());
-        }
-        return Segmenter(ed::EdBackend(std::move(*model)));
+        return from_model<ed::EdBackend>(ed::Model::load(model_path));
     }
 
     // Move-only. A Segmenter owns its model outright — 128 MB for the
@@ -189,6 +204,14 @@ private:
         std::variant<kytea::KyteaBackend, mlp::MlpBackend, ed::EdBackend>;
 
     explicit Segmenter(AnyBackend backend) noexcept : backend_(std::move(backend)) {}
+
+    template <class Backend, class Model>
+    static Expected<Segmenter, Error> from_model(Expected<Model, Error> model) {
+        if (!model) {
+            return Unexpected(model.error());
+        }
+        return Segmenter(AnyBackend(std::in_place_type<Backend>, std::move(*model)));
+    }
 
     AnyBackend backend_;
 };

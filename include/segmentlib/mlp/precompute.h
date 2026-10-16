@@ -36,9 +36,13 @@ inline constexpr int kAccShift = 9;
 // The single int32 → int16 requantization used for *every* Int16-mode
 // quantity (table blocks, fallback contributions, dictionary columns, b1):
 // round-to-nearest arithmetic shift, then saturate.
+// The rounding add is done in int64: v can sit within 2^(kAccShift-1) of
+// INT32_MAX (a bias or table entry from the file), where it would overflow.
 [[nodiscard]] constexpr std::int16_t requant_i16(std::int32_t v) noexcept {
-    const std::int32_t shifted = (v + (1 << (kAccShift - 1))) >> kAccShift;
-    return static_cast<std::int16_t>(std::clamp(shifted, -32768, 32767));
+    const std::int64_t shifted =
+        (static_cast<std::int64_t>(v) + (1 << (kAccShift - 1))) >> kAccShift;
+    return static_cast<std::int16_t>(
+        std::clamp<std::int64_t>(shifted, -32768, 32767));
 }
 
 // The first-layer precompute table of design.ja.md 4.6 (NNUE style):
@@ -120,7 +124,9 @@ public:
             return;
         }
         // Fallback synthesis (I.1-(2)) for multi-codepoint EGCs.
-        synthesize(rows, j, [&](std::size_t h, std::int32_t v) { acc[h] += v; });
+        synthesize(rows, j, [&](std::size_t h, std::int32_t v) {
+            acc[h] = kernels::scalar::wrapping_add_i32(acc[h], v);
+        });
     }
 
     // Returns the H-length Int16 contribution block for the EGC `rows` at window
