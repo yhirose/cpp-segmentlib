@@ -379,7 +379,6 @@ TEST_CASE("malformed automata are rejected, not built") {
         CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
     }
     SUBCASE("goto back to the root") {
-        // Not a tree: the root would be renamed and re-pushed forever.
         Fixture c;
         c.root_gotos = {{2, 1}, {5, 0}};
         CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
@@ -390,8 +389,6 @@ TEST_CASE("malformed automata are rejected, not built") {
         CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);
     }
     SUBCASE("failure link that does not shorten the match") {
-        // A self-loop: match() would follow it forever on a character the
-        // state has no goto for.
         Fixture c;
         c.leaf_failure = 1;
         CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);

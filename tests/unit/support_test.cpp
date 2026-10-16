@@ -165,7 +165,6 @@ TEST_CASE("run_batch keeps input order and rethrows a worker's exception") {
         REQUIRE(out.size() == texts.size());
         CHECK(*out[999] == 3);
 
-        // Before, a throw on a worker thread was std::terminate.
         CHECK_THROWS_AS(segmentlib::detail::run_batch<std::size_t>(
                             texts, threads,
                             [](std::string_view t) -> Expected<std::size_t, Error> {
@@ -179,8 +178,6 @@ TEST_CASE("run_batch keeps input order and rethrows a worker's exception") {
 }
 
 TEST_CASE("read_model_file reports a directory as an I/O error") {
-    // A directory opens as an ifstream on Linux and then reports a size near
-    // 2^63, which used to surface as std::bad_alloc from every backend's load.
     const auto data = segmentlib::detail::read_model_file(".");
     REQUIRE(!data.has_value());
     CHECK(data.error().code == ErrorCode::IoError);

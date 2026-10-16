@@ -129,10 +129,8 @@ public:
         } catch (const bytes::ParseError&) {
             return Unexpected(Error{ErrorCode::MalformedModel, format.malformed});
         } catch (const std::bad_alloc&) {
-            // Every count read is checked against the bytes left in the file,
-            // except the precompute table's: it is V × 2w × H, sized from
-            // header fields, so a small file can still ask for more memory
-            // than there is.
+            // The V × 2w × H precompute table is the one allocation not
+            // bounded by the file size.
             return Unexpected(Error{ErrorCode::MalformedModel, "model too large to load"});
         }
     }
@@ -291,11 +289,7 @@ private:
         }
         parts.w2 = detail::read_i16_tensor(in, h);
         const double b2 = in.read<double>();
-        // The biases enter the integer accumulators through llround, whose
-        // result is unspecified for a non-finite or out-of-range argument.
-        // b1 must fit the int32 accumulator; b2 is added to an int64 output
-        // dot of at most H·2^15·2^31 ≤ 2^62 in magnitude, so |b2_q| ≤ 2^62
-        // keeps that sum from overflowing.
+        // b1_q must fit int32; |b2_q| ≤ 2^62 keeps dot (≤ 2^62) + b2_q in int64.
         for (const double b : b1) {
             if (!(std::fabs(b / acc_scale) <= 2147483647.0)) {
                 throw ParseError("first-layer bias out of range");

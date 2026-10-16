@@ -166,8 +166,7 @@ TEST_CASE("the EDLA trainer honours epochs, patience and the polarity split") {
     CHECK(again.dev_metrics.f1 == stopped.dev_metrics.f1);
     CHECK(again.params.w2 == stopped.params.w2);
 
-    // Zero epochs with a dev set evaluates nothing; the initial parameters
-    // are still the result.
+    // Zero epochs with a dev set still returns parameters.
     options.epochs = 0;
     const edt::TrainResult none = edt::train(config, set, &set, options, *backend);
     CHECK(none.epochs_run == 0);

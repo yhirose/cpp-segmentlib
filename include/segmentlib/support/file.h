@@ -12,12 +12,8 @@
 
 namespace segmentlib::detail {
 
-// Reads a whole model file into memory, for the backends' load(path).
-//
-// Anything but a regular file is rejected up front: on Linux a directory opens
-// as an ifstream without complaint and then reports a size near 2^63, which
-// the resize below would turn into std::bad_alloc thrown through an Expected
-// API.
+// Reads a whole model file. Non-regular files are rejected: a directory opens
+// as an ifstream on Linux and reports a bogus size.
 inline Expected<std::vector<std::byte>, Error> read_model_file(
     const std::filesystem::path& path) {
     std::error_code ec;

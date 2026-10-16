@@ -315,8 +315,7 @@ private:
         if (r.read<std::uint8_t>() == 0) {
             throw ParseError("word-segmentation model has no feature lookup");
         }
-        // add_ngram_scores reads up to 2*window weights from every n-gram
-        // vector, one per boundary in the window.
+        // add_ngram_scores reads 2*window weights per n-gram.
         const auto window_check = [](std::size_t window) {
             return [need = 2 * window](const FeatVec& v, std::uint32_t) {
                 return v.size() >= need;
@@ -343,19 +342,15 @@ private:
 
         // --- word dictionary (needed for the D features) ---
         const int num_tags = cfg.num_tags;
-        // add_dictionary_scores indexes the boundaries of a word by its
-        // char_length back from the match end, so the length must be that of a
-        // string the matching state can actually have consumed: at least 1 and
-        // at most the state's depth.
+        // add_dictionary_scores counts char_length back from the match end.
         Automaton<WordEntry> word_dict = Automaton<WordEntry>::read(
             r,
             [num_tags](bytes::BinaryReader& rr) { return read_word_entry(rr, num_tags); },
             [](const WordEntry& e, std::uint32_t depth) {
                 return e.char_length >= 1 && e.char_length <= depth;
             });
-        // add_dictionary_scores' other assumptions: in_dict is an 8-bit mask,
-        // so at most 8 sub-dictionaries; a positive length cap; and a weight
-        // for every (sub-dictionary, label length, L/I/R) it can index.
+        // in_dict is an 8-bit mask; dict_vector is indexed by
+        // (sub-dictionary, label length, L/I/R).
         if (!word_dict.empty() && !dict_vector.empty()) {
             const std::size_t num_dicts = word_dict.num_dicts();
             if (num_dicts > 8 || cfg.dict_n == 0 ||

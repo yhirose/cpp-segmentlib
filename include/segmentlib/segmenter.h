@@ -34,13 +34,7 @@ namespace detail {
 // lengths; the chunk amortizes the atomic). Each thread writes disjoint result
 // slots, and the per-item functions are re-entrant (the model is immutable, its
 // scratch buffers are thread_local), so no locking is needed.
-//
-// An exception from `fn` (std::bad_alloc, say) reaches the caller whatever the
-// thread count: a worker that catches one stops handing out work, every thread
-// is joined, and the first exception is rethrown. Letting it escape a thread
-// (or unwinding past unjoined threads) would call std::terminate instead. A
-// thread that cannot be started is not an error either: the threads that did
-// start, the calling thread among them, share the work.
+// The first exception from `fn` is rethrown after every thread is joined.
 template <class Result, class Fn>
 std::vector<Expected<Result, Error>> run_batch(Span<const std::string_view> texts,
                                                unsigned threads, Fn fn) {
@@ -95,7 +89,7 @@ std::vector<Expected<Result, Error>> run_batch(Span<const std::string_view> text
             pool.emplace_back(worker);
         }
     } catch (...) {
-        // Out of threads (std::system_error) or memory: run with those started.
+        // Couldn't start more threads: run with those started.
     }
     worker();  // the calling thread participates too
     for (auto& th : pool) {

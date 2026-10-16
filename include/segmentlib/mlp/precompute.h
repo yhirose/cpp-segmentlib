@@ -36,8 +36,7 @@ inline constexpr int kAccShift = 9;
 // The single int32 → int16 requantization used for *every* Int16-mode
 // quantity (table blocks, fallback contributions, dictionary columns, b1):
 // round-to-nearest arithmetic shift, then saturate.
-// The rounding add is done in int64: v can sit within 2^(kAccShift-1) of
-// INT32_MAX (a bias or table entry from the file), where it would overflow.
+// The rounding add is in int64 so v near INT32_MAX cannot overflow.
 [[nodiscard]] constexpr std::int16_t requant_i16(std::int32_t v) noexcept {
     const std::int64_t shifted =
         (static_cast<std::int64_t>(v) + (1 << (kAccShift - 1))) >> kAccShift;

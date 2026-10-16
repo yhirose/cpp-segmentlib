@@ -99,9 +99,6 @@ TEST_CASE("training without a dev set returns the final parameters") {
 }
 
 TEST_CASE("zero epochs with a dev set returns the initial parameters") {
-    // Nothing is evaluated, so nothing is captured as "best"; the result must
-    // still carry parameters rather than an empty set that quantize reads
-    // through a null pointer.
     const auto sentences = parse_full_corpus("あい うえ\nうえ あい");
     REQUIRE(sentences.has_value());
     const Vocab vocab = build_vocab(*sentences, 1);

@@ -24,16 +24,14 @@
 // neither NEON nor AVX2. The unqualified functions dispatch at compile time:
 // AArch64 always has NEON; x86 uses AVX2 when the translation unit is built
 // with it (-mavx2 / /arch:AVX2), scalar otherwise. The int32 kernels are
-// bit-exact with scalar on every path (integer adds/products are associative;
-// scalar `add_i32` wraps on overflow exactly as the SIMD adds do, rather than
-// leaving a model with out-of-range weights undefined behaviour). The int16
+// bit-exact with scalar on every path (integer adds/products are associative,
+// and scalar `add_i32` wraps like the SIMD adds). The int16
 // kernels match too, with one known exception: AVX2 `dot_i16` uses
 // `_mm256_madd_epi16`, which wraps when both halves of a 32-bit pair are
 // -32768, so it can differ from scalar on inputs that are not relu-bounded.
 // `fused_score_i16` is unaffected because its dot always follows the relu.
 
-// AArch64 only: the kernels use AArch64-only intrinsics (vaddvq_s64,
-// vmull_high_*), so 32-bit ARM with NEON takes the scalar path.
+// AArch64 only: 32-bit ARM lacks vaddvq_s64 / vmull_high_*.
 #if defined(__aarch64__)
 #define SEGMENTLIB_KERNELS_NEON 1
 #include <arm_neon.h>
@@ -46,7 +44,6 @@ namespace segmentlib::mlp::kernels {
 
 namespace scalar {
 
-// Wrapping (two's complement), like the SIMD adds; see the header comment.
 [[nodiscard]] inline std::int32_t wrapping_add_i32(std::int32_t a, std::int32_t b) noexcept {
     return static_cast<std::int32_t>(static_cast<std::uint32_t>(a) +
                                      static_cast<std::uint32_t>(b));

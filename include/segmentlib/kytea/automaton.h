@@ -63,15 +63,11 @@ public:
     // `new_id` and `payloads_` with these values directly, so an unchecked one
     // is an out-of-bounds write at an attacker-chosen offset, not a wrong
     // answer; the checks below are what makes a malformed model a rejected
-    // model. The structural checks cannot be made here — that the goto graph
-    // is a tree reaching every state, and that every failure link points at a
-    // strictly shallower state (otherwise match() never terminates) — and live
-    // in build_canonical, whose DFS establishes each state's depth anyway.
+    // model. The structural checks (a goto tree reaching every state, failure
+    // links to strictly shallower states) live in build_canonical's DFS.
     //
-    // `check_payload(const Payload&, depth)` is called for every output of
-    // every state, with that state's depth (the length of the string it
-    // accepts), and returns false to reject the file. It is where a caller
-    // validates what its matcher callback will assume of a payload.
+    // `check_payload(payload, depth)` sees every output with its state's depth
+    // and returns false to reject the file.
     template <class ReadPayload, class CheckPayload = AcceptAnyPayload>
     static Automaton read(bytes::BinaryReader& r, ReadPayload read_payload,
                           CheckPayload check_payload = {}) {
@@ -277,8 +273,7 @@ private:
     // processed (parent before child), and, by keeping each subtree's nodes
     // contiguous, keeps the free-list frontier local so the base search stays
     // cheap (BFS order scatters siblings and multiplies collisions ~5x). Failure
-    // links and outputs are then remapped into the new ids; the depth-based
-    // checks (failure links, check_payload) ride along on those loops.
+    // links and outputs are then remapped into the new ids.
     template <class CheckPayload>
     void build_canonical(std::vector<TempState>& temp, CheckPayload& check_payload) {
         const std::size_t n = num_states_;
@@ -393,9 +388,7 @@ private:
                 if (slot >= unit_.size()) {
                     grow(slot + 1);
                 }
-                // A state named by a second goto (or the root named by any)
-                // would be renamed and re-pushed forever: the graph must be a
-                // tree.
+                // Not a tree: the state would be re-pushed forever.
                 if (new_id[child_old] != kNull) {
                     throw bytes::ParseError("automaton goto graph is not a tree");
                 }
@@ -426,10 +419,7 @@ private:
         out_offset_.assign(units + 1, 0);
         is_branch_.assign(units, 0);
         for (std::size_t s = 0; s < n; ++s) {
-            // match() follows failure links until a transition succeeds or the
-            // root is reached; that terminates only if every link strictly
-            // shortens the match, as a real Aho-Corasick failure link (a proper
-            // suffix) does. The root's own link is never followed.
+            // match() terminates only if each failure link shortens the match.
             if (s != 0 && depth[temp[s].failure] >= depth[s]) {
                 throw bytes::ParseError("automaton failure link does not shorten the match");
             }

@@ -63,12 +63,9 @@ void put_one_entry_dict(Writer& w, std::uint8_t num_dicts, std::uint16_t c,
     put_payload();
 }
 
-// Optional non-empty dictionaries for build_min_model, each a single entry
-// on the one-character string {1}.
+// Optional single-entry dictionaries on the string {1}; empty means absent.
 struct Extras {
-    // Char n-gram dictionary entry's weight vector; absent if empty.
     std::vector<std::int16_t> char_ngram;
-    // Word dictionary entry; absent if word_dicts == 0.
     std::uint8_t word_dicts = 0;
     std::uint32_t word_length = 1;
     std::uint8_t dict_n = 4;

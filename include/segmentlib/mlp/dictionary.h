@@ -230,13 +230,8 @@ inline void write_compiled_dictionaries(bytes::BinaryWriter& out,
     }
 }
 
-// Whether byte code read from a model file is safe to hand to fst::map.
-// cpp-fstlib's matcher checks only the trailer and header when it opens a
-// byte code, then follows the start address (already while constructing, to
-// build its root dispatch) without a bounds check. So that address must lie
-// inside the body, and verify() (the body hash) rules out a corrupted body. A
-// hash is no defense against a deliberately crafted file; that needs
-// bounds-checked matching in cpp-fstlib itself.
+// fst::map follows the start address unchecked, so it must lie inside the
+// body; verify() catches corruption (not a crafted file).
 [[nodiscard]] inline bool fst_byte_code_intact(const std::string& byte_code) {
     fst::FstHeader header;
     fst::FstTrailer trailer;

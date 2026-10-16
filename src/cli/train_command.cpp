@@ -285,8 +285,7 @@ bool prepare(const Options& opt, Prepared& out) {
         out.dev_set = build_examples(*parsed, out.vocab, out.dictionaries,
                                      static_cast<std::uint8_t>(opt.char_window),
                                      nullptr);
-        // An empty dev set scores F1 0 every epoch, so model selection would
-        // silently keep epoch 1, and quantization would calibrate on nothing.
+        // Model selection and calibration would silently run on nothing.
         if (out.dev_set.examples.empty()) {
             std::println(stderr, "train: {}: no supervised boundaries in the dev corpus",
                          opt.dev_corpus);

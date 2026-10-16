@@ -106,9 +106,7 @@ TrainResult train(const NetConfig& config, const ExampleSet& train_set,
         }
     }
 
-    // Without a dev set nothing was captured, and with one but zero epochs
-    // nothing was evaluated (best_f1 is still below any real F1): either way the
-    // final parameters are the result.
+    // Nothing captured: no dev set, or zero epochs.
     if (dev_set == nullptr || best_f1 < 0.0) {
         result.pinned_units = count_pinned(params);
         result.params = std::move(params);
