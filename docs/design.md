@@ -317,7 +317,7 @@ boundary ⇔ y > 0
 
 **Precomputed table**: built for frequent EGCs (≈ frequent codepoints). Rare EGCs fall back to a compositional path ("codepoint embedding → mean → multiply by W1_j").
 
-**SIMD kernels**: `include/segmentlib/mlp/kernels.h` (header-only) has 6 add/relu/dot kernels for int32/int16, plus `add_widen_i16_i32` and the fused `fused_score_i16` that the Int16 path actually runs (Section 4.8). `kernels::scalar::*` is the always-compiled oracle; dispatch is compile-time (AArch64→NEON, x86 uses AVX2 only when `__AVX2__` is defined, otherwise scalar). Both NEON and AVX2 are bit-exactness-tested on real hardware (NEON = local ARM hardware, AVX2 = CI ubuntu-24.04 hardware + Windows MSVC hardware).
+**SIMD kernels**: `include/segmentlib/mlp/kernels.h` (header-only) has the three int32 kernels (`add_i32`, `relu_i32`, `dot_i32`) and the fused `fused_score_i16` that the Int16 path runs (Section 4.8). `kernels::scalar::*` is the always-compiled oracle; dispatch is compile-time (AArch64→NEON, x86 uses AVX2 only when `__AVX2__` is defined, otherwise scalar). Both NEON and AVX2 are bit-exactness-tested on real hardware (NEON = local ARM hardware, AVX2 = CI ubuntu-24.04 hardware + Windows MSVC hardware).
 
 **thread_local scratch**: `Scratch{EncodedEgc,Workspace,scores}` behind the `detail::scratch()` accessor in `mlp/mlp_backend.h`, zero per-call allocation. It sits in a function rather than at namespace scope because the header is included in many translation units and the scratch must be one object program-wide.
 

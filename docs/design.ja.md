@@ -317,7 +317,7 @@ y = dot(w2, h) + b2      （256次元内積 1 回）
 
 **事前計算テーブル**：頻出EGC（≒頻出コードポイント）について構築。稀なEGCは「コードポイント埋め込み→mean→W1_jを掛ける」合成経路にフォールバックする。
 
-**SIMDカーネル**：`include/segmentlib/mlp/kernels.h`（ヘッダオンリー）にadd/relu/dot×int32/int16の6カーネル＋`add_widen_i16_i32`、およびInt16経路が実際に走らせる融合カーネル`fused_score_i16`（4.8節）。`kernels::scalar::*`が常時コンパイルされるoracle、ディスパッチはコンパイル時（AArch64→NEON、x86は`__AVX2__`定義時のみAVX2、他はscalar）。NEON・AVX2ともbit一致テストで実機検証済み（NEON=ローカルARM実機、AVX2=CI ubuntu-24.04実機＋Windows MSVC実機）。
+**SIMDカーネル**：`include/segmentlib/mlp/kernels.h`（ヘッダオンリー）にint32の3カーネル（`add_i32`・`relu_i32`・`dot_i32`）と、Int16経路が走らせる融合カーネル`fused_score_i16`（4.8節）。`kernels::scalar::*`が常時コンパイルされるoracle、ディスパッチはコンパイル時（AArch64→NEON、x86は`__AVX2__`定義時のみAVX2、他はscalar）。NEON・AVX2ともbit一致テストで実機検証済み（NEON=ローカルARM実機、AVX2=CI ubuntu-24.04実機＋Windows MSVC実機）。
 
 **thread_localスクラッチ**：`mlp/mlp_backend.h`の`detail::scratch()`アクセサが持つ`Scratch{EncodedEgc,Workspace,scores}`、per-call割当ゼロ。名前空間スコープではなく関数内に置くのは、ヘッダが多数の翻訳単位にincludeされてもプログラム全体で1つの実体でなければならないため。
 

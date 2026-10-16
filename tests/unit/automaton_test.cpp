@@ -297,7 +297,7 @@ TEST_CASE("malformed automata are rejected, not built") {
     }
     SUBCASE("state unreachable from the root") {
         // State 2 is declared and written but named by no goto, so it keeps
-        // new_id == kNull and the remap would index fail_ at 2^32-1.
+        // new_id == kNoState and the remap would index fail_ at 2^32-1.
         Fixture c;
         c.extra_states = 1;
         CHECK_THROWS_AS(parse(build_fixture(c)), ParseError);

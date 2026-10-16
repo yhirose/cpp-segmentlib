@@ -246,6 +246,8 @@ TEST_CASE("Segmenter::load auto-detects the MLP signature") {
     REQUIRE(segments->size() == 2);
     CHECK((*segments)[0] == std::pair<std::size_t, std::size_t>{0, 3});
 
+    CHECK(!segmenter->unicode_version_mismatch());
+
     // The MLP-forced loader accepts it too; the KyTea-forced loader must not.
     CHECK(Segmenter::load_mlp(path).has_value());
     CHECK(!Segmenter::load_kytea(path).has_value());
@@ -347,4 +349,16 @@ TEST_CASE("a model trained with other Unicode rules reports the mismatch quietly
     REQUIRE(model.has_value());
     CHECK(model->unicode_version_mismatch());
     CHECK(MlpBackend(*model).unicode_version_mismatch());
+
+    const std::filesystem::path path = "segmentlib_mismatch_test.mlp";  // cwd
+    {
+        std::ofstream out(path, std::ios::binary);
+        REQUIRE(out.good());
+        out.write(reinterpret_cast<const char*>(bytes.data()),
+                  static_cast<std::streamsize>(bytes.size()));
+    }
+    const auto segmenter = Segmenter::load(path);
+    REQUIRE(segmenter.has_value());
+    CHECK(segmenter->unicode_version_mismatch());
+    std::filesystem::remove(path);
 }

@@ -4,7 +4,6 @@
 #include <cstddef>
 #include <cstdint>
 #include <limits>
-#include <type_traits>
 #include <utility>
 #include <vector>
 
@@ -72,7 +71,7 @@ public:
         if (n_states == 0) {
             return a;  // absent dictionary: no entries follow
         }
-        // Each state is at least failure + n_gotos + n_out + is_branch on disk.
+        // Each state is at least failure + n_gotos + n_out + isBranch on disk.
         r.require_capacity(n_states, 4 + 4 + 4 + 1);
         std::vector<TempState> temp(n_states);
         // Bound on the output indices seen so far (largest + 1, 0 if none).

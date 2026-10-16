@@ -3,14 +3,12 @@
 #include <array>
 #include <cstddef>
 #include <cstdint>
-#include <string>
 #include <string_view>
 #include <unordered_map>
 #include <vector>
 
 #include "segmentlib/bytes/binary_reader.h"
 #include "segmentlib/support/expected.h"
-#include "segmentlib/support/span.h"
 #include "segmentlib/types.h"
 #include "segmentlib/unicode/normalize.h"
 #include "segmentlib/unicode/utf8.h"
