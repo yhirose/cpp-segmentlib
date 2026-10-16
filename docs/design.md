@@ -344,7 +344,7 @@ Example: `SegmentLibMLP 1\n`. This `"SegmentLibMLP "` signature is used for back
 | 2 | `embed_dim` `d` | `uint16` | codepoint embedding dimension. `64` (Section 4.4) |
 | 3 | `hidden` `H` | `uint16` | hidden layer width. `256` (Section 4.4) |
 | 4 | `num_dicts` | `uint8` | number of dictionaries (`0` allowed; if `0` the W_dict/dictionary sections are absent) |
-| 4b | `unicode_version` | `uint16` | the Unicode version used for EGC splitting at training time (major x 100 + minor). The loader warns on mismatch |
+| 4b | `unicode_version` | `uint16` | the Unicode version used for EGC splitting at training time (major x 100 + minor). A mismatch is reported by `Segmenter::unicode_version_mismatch()` |
 | **Scales** (quantization scales) | | | |
 | 5 | `emb_scale` | `double` | embedding int16→real coefficient |
 | 6 | `w1_scale` | `double` | W1's int16→real coefficient |

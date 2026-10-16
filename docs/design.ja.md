@@ -344,7 +344,7 @@ SegmentLibMLP <version>\n
 | 2 | `embed_dim` `d` | `uint16` | コードポイント埋め込み次元。4.4節で`64` |
 | 3 | `hidden` `H` | `uint16` | 隠れ層幅。4.4節で`256` |
 | 4 | `num_dicts` | `uint8` | 辞書数（`0`可。`0`ならW_dict・辞書セクションは書かれない） |
-| 4b | `unicode_version` | `uint16` | 学習時のEGC分割に使ったUnicodeバージョン（メジャー×100+マイナー）。不一致ならローダが警告する |
+| 4b | `unicode_version` | `uint16` | 学習時のEGC分割に使ったUnicodeバージョン（メジャー×100+マイナー）。不一致は`Segmenter::unicode_version_mismatch()`で分かる |
 | **Scales**（量子化スケール） | | | |
 | 5 | `emb_scale` | `double` | 埋め込みint16→実数の係数 |
 | 6 | `w1_scale` | `double` | W1のint16→実数の係数 |

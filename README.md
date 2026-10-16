@@ -151,9 +151,10 @@ The MLP and EDLA backends split text into extended grapheme clusters
 codepoints and does not depend on it. The version is available as
 `segmentlib::unicode::kEgcUnicodeVersion` (major x 100 + minor, so `1800`),
 and `segmenter --version` prints it. A model file records the Unicode version
-it was trained with, and loading one trained with different data prints a
-warning. `scripts/gen_egc_table.py` regenerates the property table for a new
-version.
+it was trained with. `Segmenter::unicode_version_mismatch()` reports whether a
+loaded model was trained with different data, and `segmenter predict` prints a
+warning when it was. `scripts/gen_egc_table.py` regenerates the property table
+for a new version.
 
 ## License
 
