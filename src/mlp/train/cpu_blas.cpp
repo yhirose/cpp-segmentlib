@@ -1,8 +1,10 @@
 #include "mlp/train/compute_backend.h"
 
-#if defined(__APPLE__)
+#if defined(SEGMENTLIB_BLAS_ACCELERATE)
 #define ACCELERATE_NEW_LAPACK
 #include <Accelerate/Accelerate.h>
+#elif defined(SEGMENTLIB_BLAS_MKL)
+#include <mkl_cblas.h>
 #else
 #include <cblas.h>
 #endif

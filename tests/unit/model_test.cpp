@@ -156,7 +156,6 @@ TEST_CASE("Model::load_from_bytes parses a minimal model") {
     CHECK(model->config().char_window == 3);
     CHECK(model->config().type_window == 3);
     CHECK(model->config().dict_n == 4);
-    CHECK(model->config().solver == 5);
 
     CHECK(model->multiplier() == doctest::Approx(0.25));
     REQUIRE(model->biases().size() == 1);

@@ -24,18 +24,14 @@ using FeatVal = std::int16_t;
 using FeatVec = std::vector<FeatVal>;
 
 // The subset of KyTea's training configuration that word segmentation needs.
-// `num_tags`/`do_tags` are kept only to size and skip the model file's tag
-// sections during parsing (this library does not retain or predict tags).
+// `num_tags` is kept only to size and skip the model file's tag sections
+// during parsing (this library does not retain or predict tags).
 struct Config {
     std::uint8_t char_window = 0;  // characters on each side of a boundary
-    std::uint8_t char_n = 0;       // max character n-gram order
     std::uint8_t type_window = 0;
-    std::uint8_t type_n = 0;
     std::uint8_t dict_n = 0;  // dictionary match-length cap
     int num_tags = 0;
     bool do_ws = false;
-    bool do_tags = false;
-    int solver = 0;
 };
 
 // Per-dictionary-word data needed for the word-segmentation D features. The
@@ -283,20 +279,20 @@ private:
 
         Config cfg;
         cfg.do_ws = r.read_bool();
-        cfg.do_tags = r.read_bool();
+        discard_bool(r);  // doTags
         const auto num_tags_raw = r.read<std::uint32_t>();
         if (num_tags_raw > static_cast<std::uint32_t>(std::numeric_limits<int>::max())) {
             throw ParseError("implausible tag level count");
         }
         cfg.num_tags = static_cast<int>(num_tags_raw);
         cfg.char_window = r.read<std::uint8_t>();
-        cfg.char_n = r.read<std::uint8_t>();
+        discard<std::uint8_t>(r);  // charN
         cfg.type_window = r.read<std::uint8_t>();
-        cfg.type_n = r.read<std::uint8_t>();
+        discard<std::uint8_t>(r);  // typeN
         cfg.dict_n = r.read<std::uint8_t>();
         discard_bool(r);     // bias flag (config-level; the model's own flag is used)
         discard<double>(r);  // epsilon
-        cfg.solver = r.read<std::uint8_t>();
+        discard<std::uint8_t>(r);  // solver
 
         CharTable chars(r.read_cstring());
 

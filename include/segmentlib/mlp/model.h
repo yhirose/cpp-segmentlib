@@ -3,7 +3,6 @@
 #include <cmath>
 #include <cstddef>
 #include <cstdint>
-#include <cstdio>
 #include <filesystem>
 #include <new>
 #include <string>
@@ -196,7 +195,8 @@ public:
     }
 
     // True when the model was trained with different Unicode data than this
-    // build's EGC splitter (5.7 field 4b); the loader also warns on stderr.
+    // build's EGC splitter (5.7 field 4b); segmentation of the clusters affected
+    // by the difference may diverge. The caller decides whether to warn.
     [[nodiscard]] bool unicode_version_mismatch() const noexcept {
         return parts_.unicode_mismatch;
     }
@@ -236,13 +236,6 @@ private:
         }
         if (c.unicode_version != unicode::kEgcUnicodeVersion) {
             parts.unicode_mismatch = true;
-            std::fprintf(stderr,
-                         "segmentlib: MLP model was trained with Unicode %u.%u EGC "
-                         "rules but this build uses %u.%u; segmentation of "
-                         "clusters affected by the difference may diverge\n",
-                         c.unicode_version / 100, c.unicode_version % 100,
-                         unicode::kEgcUnicodeVersion / 100,
-                         unicode::kEgcUnicodeVersion % 100);
         }
 
         // Scales (fields 5-8b).

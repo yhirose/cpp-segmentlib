@@ -90,18 +90,6 @@ TEST_CASE("CharTable::encode normalizes before interning") {
     CHECK(enc->type_ids[1] == table.id_of(U'D'));
 }
 
-TEST_CASE("CharTable::decode inverts id assignment back to UTF-8") {
-    CharTable table("KTHRDO あ水"sv);  // 'あ' at id 7, '水' at id 8
-    const std::vector<CharId> ids = {table.id_of(U'水'), table.id_of(U'あ')};
-    CHECK(table.decode(ids) == "水あ");
-
-    // The reserved empty-string id 0 contributes nothing.
-    const std::vector<CharId> with_zero = {table.id_of(U'あ'), kNoChar, table.id_of(U'水')};
-    CHECK(table.decode(with_zero) == "あ水");
-
-    CHECK(table.decode(std::vector<CharId>{}).empty());
-}
-
 TEST_CASE("CharTable::encode reports invalid UTF-8") {
     CharTable table("KTHRDO"sv);
     auto enc = table.encode("\xE3\x81"sv);  // truncated

@@ -184,6 +184,13 @@ public:
             backend_);
     }
 
+    // True when an MLP/EDLA model was trained with different Unicode EGC rules
+    // than this build's, so segmentation of the clusters affected by the
+    // difference may diverge. Always false for a KyTea model.
+    [[nodiscard]] bool unicode_version_mismatch() const {
+        return std::visit([](const auto& b) { return b.unicode_version_mismatch(); }, backend_);
+    }
+
     // Tokenizes many inputs in parallel; result[i] corresponds to texts[i].
     // Inputs are independent and the model is immutable, so throughput scales
     // near-linearly with cores. `threads == 0` uses hardware_concurrency().

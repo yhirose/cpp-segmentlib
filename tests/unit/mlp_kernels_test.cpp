@@ -1,5 +1,6 @@
 #include <doctest/doctest.h>
 
+#include <algorithm>
 #include <cstdint>
 #include <random>
 #include <vector>
@@ -61,60 +62,6 @@ TEST_CASE("int32 kernels match the scalar reference") {
     }
 }
 
-TEST_CASE("int16 kernels match the scalar reference, saturation included") {
-    std::mt19937 rng(11);
-    for (const std::size_t n : kSizes) {
-        CAPTURE(n);
-        // Full-range int16 values: adds frequently saturate in both
-        // directions, exercising the clip semantics.
-        const auto src = random_i16(rng, n);
-        const auto base = random_i16(rng, n);
-        const auto w2 = random_i16(rng, n);
-
-        auto expected = base;
-        auto actual = base;
-        kernels::scalar::add_sat_i16(src.data(), expected.data(), n);
-        kernels::add_sat_i16(src.data(), actual.data(), n);
-        CHECK(actual == expected);
-
-        kernels::scalar::relu_i16(expected.data(), n);
-        kernels::relu_i16(actual.data(), n);
-        CHECK(actual == expected);
-
-        CHECK(kernels::dot_i16(w2.data(), actual.data(), n) ==
-              kernels::scalar::dot_i16(w2.data(), expected.data(), n));
-    }
-}
-
-TEST_CASE("saturating add clips at the int16 limits") {
-    const std::int16_t src[] = {32767, 32767, -32768, -32768, 100};
-    std::int16_t acc[] = {1, 32767, -1, -32768, -50};
-    kernels::add_sat_i16(src, acc, 5);
-    CHECK(acc[0] == 32767);   // 32768 clipped
-    CHECK(acc[1] == 32767);   // far past the limit
-    CHECK(acc[2] == -32768);  // -32769 clipped
-    CHECK(acc[3] == -32768);
-    CHECK(acc[4] == 50);      // no clip
-}
-
-TEST_CASE("widening add matches the scalar reference") {
-    std::mt19937 rng(13);
-    // Tail-exercising sizes plus the widths the KyTea tag scorer actually
-    // uses: nw=21 (jp model lev0 POS candidates) and nw=4 (per-word lev1).
-    constexpr std::size_t kWidenSizes[] = {1, 3, 4, 7, 8, 15, 16, 21, 63, 256};
-    for (const std::size_t n : kWidenSizes) {
-        CAPTURE(n);
-        const auto src = random_i16(rng, n);  // full int16 range
-        const auto base = random_i32(rng, n, -(1 << 26), 1 << 26);
-
-        auto expected = base;
-        auto actual = base;
-        kernels::scalar::add_widen_i16_i32(src.data(), expected.data(), n);
-        kernels::add_widen_i16_i32(src.data(), actual.data(), n);
-        CHECK(actual == expected);
-    }
-}
-
 TEST_CASE("fused int16 score matches the unfused kernel sequence") {
     std::mt19937 rng(17);
     // nblocks spans a realistic 2w (=10) plus dict columns, and the degenerate
@@ -141,11 +88,15 @@ TEST_CASE("fused int16 score matches the unfused kernel sequence") {
             // Reference: copy b1, saturating-add each block in order, relu, dot.
             std::vector<std::int16_t> acc = b1;
             for (const auto& bd : block_data) {
-                kernels::scalar::add_sat_i16(bd.data(), acc.data(), h);
+                for (std::size_t i = 0; i < h; ++i) {
+                    acc[i] = static_cast<std::int16_t>(
+                        std::clamp<std::int32_t>(acc[i] + bd[i], -32768, 32767));
+                }
             }
-            kernels::scalar::relu_i16(acc.data(), h);
-            const std::int64_t expected =
-                kernels::scalar::dot_i16(w2.data(), acc.data(), h);
+            std::int64_t expected = 0;
+            for (std::size_t i = 0; i < h; ++i) {
+                expected += static_cast<std::int64_t>(w2[i]) * std::max<std::int16_t>(acc[i], 0);
+            }
 
             const std::int64_t actual = kernels::fused_score_i16(
                 b1.data(), blocks.data(), nblocks, w2.data(), h);

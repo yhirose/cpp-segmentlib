@@ -60,11 +60,22 @@ if(SEGMENTLIB_BUILD_TRAINING)
         set(SEGMENTLIB_BLAS "OpenBLAS" CACHE STRING
             "BLAS implementation for training (Accelerate|OpenBLAS|MKL)")
     endif()
+    # The option picks both the library to link and the header cpu_blas.cpp
+    # includes (via a compile definition).
     if(SEGMENTLIB_BLAS STREQUAL "Accelerate")
         target_link_libraries(segmentlib_train PRIVATE "-framework Accelerate")
-    else()
+        target_compile_definitions(segmentlib_train PRIVATE SEGMENTLIB_BLAS_ACCELERATE)
+    elseif(SEGMENTLIB_BLAS STREQUAL "OpenBLAS")
+        set(BLA_VENDOR OpenBLAS)
         find_package(BLAS REQUIRED)
         target_link_libraries(segmentlib_train PRIVATE BLAS::BLAS)
+    elseif(SEGMENTLIB_BLAS STREQUAL "MKL")
+        set(BLA_VENDOR Intel10_64lp)
+        find_package(BLAS REQUIRED)
+        target_link_libraries(segmentlib_train PRIVATE BLAS::BLAS)
+        target_compile_definitions(segmentlib_train PRIVATE SEGMENTLIB_BLAS_MKL)
+    else()
+        message(FATAL_ERROR "SEGMENTLIB_BLAS must be Accelerate, OpenBLAS or MKL")
     endif()
 endif()
 

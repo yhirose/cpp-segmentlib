@@ -37,6 +37,7 @@ namespace {
 struct TinyOverrides {
     double b1 = 0.5;
     double b2 = -1.0;
+    std::uint16_t unicode_version = unicode::kEgcUnicodeVersion;
     bool corrupt_fst_body = false;  // flip a byte the FST's body hash covers
 };
 
@@ -47,7 +48,7 @@ std::vector<std::byte> tiny_model_bytes(const TinyOverrides& o = {}) {
     out.write<std::uint16_t>(1);   // d
     out.write<std::uint16_t>(1);   // H
     out.write<std::uint8_t>(1);    // num_dicts
-    out.write<std::uint16_t>(unicode::kEgcUnicodeVersion);
+    out.write<std::uint16_t>(o.unicode_version);
     out.write<double>(0.01);   // emb
     out.write<double>(0.1);    // w1
     out.write<double>(0.002);  // wdict
@@ -338,4 +339,12 @@ TEST_CASE("load rejects a dictionary FST whose body fails its hash") {
     const auto model = Model::load_from_bytes(bytes);
     REQUIRE(!model.has_value());
     CHECK(model.error().code == ErrorCode::MalformedModel);
+}
+
+TEST_CASE("a model trained with other Unicode rules reports the mismatch quietly") {
+    const auto bytes = tiny_model_bytes({.unicode_version = unicode::kEgcUnicodeVersion - 1});
+    const auto model = Model::load_from_bytes(bytes);
+    REQUIRE(model.has_value());
+    CHECK(model->unicode_version_mismatch());
+    CHECK(MlpBackend(*model).unicode_version_mismatch());
 }

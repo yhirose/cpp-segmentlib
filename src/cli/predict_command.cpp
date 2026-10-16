@@ -97,6 +97,13 @@ int run_predict(std::span<const std::string_view> args) {
         return 1;
     }
 
+    if (segmenter->unicode_version_mismatch()) {
+        std::println(stderr,
+                     "predict: warning: the model was trained with different Unicode "
+                     "grapheme rules than this build; clusters affected by the "
+                     "difference may segment differently");
+    }
+
     std::ios::sync_with_stdio(false);
 
     // Process the input in blocks: read up to kBlock lines, segment them in

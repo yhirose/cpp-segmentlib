@@ -80,73 +80,23 @@ std::vector<std::byte> build_automaton() {
     return std::move(w.bytes);
 }
 
-// Builds the automaton for {"ABC" -> 200, "B" -> 201} over the alphabet
-// {A=1, B=2, C=3}. The point of interest is state "AB": a non-word prefix of
-// "ABC" whose failure link points at the word "B", so buildFailures propagates
-// "B"'s output onto it. It therefore has a non-empty output but isBranch == 0 —
-// exactly the case find_entry must reject (an exact walk of "AB" is not a word).
-//
-//   state 0 (root): gotos A->1, B->2
-//   state 1 ("A"):  goto B->3, no output, isBranch 0
-//   state 2 ("B"):  output {1}=entry 201, isBranch 1
-//   state 3 ("AB"): goto C->4, output {1} (from failure 2), isBranch 0
-//   state 4 ("ABC"):output {0}=entry 200, isBranch 1
-std::vector<std::byte> build_branch_automaton() {
-    Writer w;
-    w.put_u8(1);              // numDicts
-    w.put<std::uint32_t>(5);  // numStates
-
-    // state 0 (root)
-    w.put<std::uint32_t>(0);  // failure
-    w.put<std::uint32_t>(2);  // 2 gotos
-    w.put<std::uint16_t>(1); w.put<std::uint32_t>(1);  // A->1
-    w.put<std::uint16_t>(2); w.put<std::uint32_t>(2);  // B->2
-    w.put<std::uint32_t>(0);  // 0 outputs
-    w.put_u8(0);              // isBranch
-
-    // state 1 ("A")
-    w.put<std::uint32_t>(0);  // failure
-    w.put<std::uint32_t>(1);  // 1 goto
-    w.put<std::uint16_t>(2); w.put<std::uint32_t>(3);  // B->3
-    w.put<std::uint32_t>(0);  // 0 outputs
-    w.put_u8(0);              // isBranch (prefix, not a word)
-
-    // state 2 ("B")
-    w.put<std::uint32_t>(0);  // failure
-    w.put<std::uint32_t>(0);  // 0 gotos
-    w.put<std::uint32_t>(1);  // 1 output
-    w.put<std::uint32_t>(1);  // -> entry 1 (201)
-    w.put_u8(1);              // isBranch
-
-    // state 3 ("AB")
-    w.put<std::uint32_t>(2);  // failure -> state 2 ("B")
-    w.put<std::uint32_t>(1);  // 1 goto
-    w.put<std::uint16_t>(3); w.put<std::uint32_t>(4);  // C->4
-    w.put<std::uint32_t>(1);  // 1 output (propagated from "B")
-    w.put<std::uint32_t>(1);  // -> entry 1 (201)
-    w.put_u8(0);              // isBranch == 0 (NOT a word)
-
-    // state 4 ("ABC")
-    w.put<std::uint32_t>(0);  // failure
-    w.put<std::uint32_t>(0);  // 0 gotos
-    w.put<std::uint32_t>(1);  // 1 output
-    w.put<std::uint32_t>(0);  // -> entry 0 (200)
-    w.put_u8(1);              // isBranch
-
-    // entries: 2 payloads
-    w.put<std::uint32_t>(2);
-    w.put<std::uint32_t>(200);
-    w.put<std::uint32_t>(201);
-
-    return std::move(w.bytes);
-}
-
 Automaton<int> parse(const std::vector<std::byte>& bytes) {
     std::span<const std::byte> sp(bytes);
     BinaryReader r(sp);
     return Automaton<int>::read(r, [](BinaryReader& rr) {
         return static_cast<int>(rr.read<std::uint32_t>());
     });
+}
+
+struct Match {
+    std::size_t end_pos;
+    const int* payload;
+};
+
+std::vector<Match> match_all(const Automaton<int>& a, std::span<const CharId> text) {
+    std::vector<Match> result;
+    a.match(text, [&](std::size_t pos, const int& p) { result.push_back({pos, &p}); });
+    return result;
 }
 
 }  // namespace
@@ -165,7 +115,7 @@ TEST_CASE("failure fallback after a longer match") {
     // then at position 2 the automaton falls back 3->2->0 before matching "5".
     auto a = parse(build_automaton());
     std::vector<CharId> text{5, 7, 5};
-    auto m = a.match_all(text);
+    auto m = match_all(a, text);
     REQUIRE(m.size() == 4);
     CHECK(m[0].end_pos == 0);
     CHECK(*m[0].payload == 100);  // "5"
@@ -181,7 +131,7 @@ TEST_CASE("clean failure fallback with no long match") {
     // {7,5}: "7" at 0, then step(2,5)=0 forces fallback to root before "5".
     auto a = parse(build_automaton());
     std::vector<CharId> text{7, 5};
-    auto m = a.match_all(text);
+    auto m = match_all(a, text);
     REQUIRE(m.size() == 2);
     CHECK(*m[0].payload == 101);  // "7"
     CHECK(m[0].end_pos == 0);
@@ -192,7 +142,7 @@ TEST_CASE("clean failure fallback with no long match") {
 TEST_CASE("multi-character match emits propagated outputs") {
     auto a = parse(build_automaton());
     std::vector<CharId> text{5, 7};
-    auto m = a.match_all(text);
+    auto m = match_all(a, text);
     REQUIRE(m.size() == 3);
     CHECK(m[0].end_pos == 0);
     CHECK(*m[0].payload == 100);  // "5"
@@ -205,7 +155,7 @@ TEST_CASE("multi-character match emits propagated outputs") {
 TEST_CASE("failure link then re-match") {
     auto a = parse(build_automaton());
     std::vector<CharId> text{7, 5, 7};
-    auto m = a.match_all(text);
+    auto m = match_all(a, text);
     REQUIRE(m.size() == 4);
     CHECK(*m[0].payload == 101);  // "7"   @0
     CHECK(*m[1].payload == 100);  // "5"   @1
@@ -217,56 +167,7 @@ TEST_CASE("failure link then re-match") {
 TEST_CASE("unknown characters never match") {
     auto a = parse(build_automaton());
     std::vector<CharId> text{9, 9, 9};  // not in the alphabet
-    CHECK(a.match_all(text).empty());
-}
-
-TEST_CASE("find_entry returns exact whole-string matches") {
-    auto a = parse(build_automaton());  // {"5"->100, "7"->101, "57"->102}
-    const std::vector<CharId> five{5};
-    const std::vector<CharId> seven{7};
-    const std::vector<CharId> fiveseven{5, 7};
-    REQUIRE(a.find_entry(five) != nullptr);
-    CHECK(*a.find_entry(five) == 100);
-    REQUIRE(a.find_entry(seven) != nullptr);
-    CHECK(*a.find_entry(seven) == 101);
-    // "57" must return its own entry (output[0]), not the "7" propagated onto it.
-    REQUIRE(a.find_entry(fiveseven) != nullptr);
-    CHECK(*a.find_entry(fiveseven) == 102);
-}
-
-TEST_CASE("find_entry rejects non-matches and the empty string") {
-    auto a = parse(build_automaton());
-    const std::vector<CharId> unknown{9};       // no root goto
-    const std::vector<CharId> falls_off{5, 7, 5};  // walk leaves the trie
-    const std::vector<CharId> empty{};
-    CHECK(a.find_entry(unknown) == nullptr);
-    CHECK(a.find_entry(falls_off) == nullptr);
-    CHECK(a.find_entry(empty) == nullptr);
-}
-
-TEST_CASE("find_entry rejects a prefix state carrying a propagated output") {
-    auto a = parse(build_branch_automaton());  // {"ABC"->200, "B"->201}
-    const std::vector<CharId> abc{1, 2, 3};
-    const std::vector<CharId> b{2};
-    const std::vector<CharId> ab{1, 2};  // non-word prefix with "B"'s output
-    const std::vector<CharId> aonly{1};  // prefix with no output
-    REQUIRE(a.find_entry(abc) != nullptr);
-    CHECK(*a.find_entry(abc) == 200);
-    REQUIRE(a.find_entry(b) != nullptr);
-    CHECK(*a.find_entry(b) == 201);
-    // "AB" has a non-empty (propagated) output but is not a word: the isBranch
-    // guard must reject it.
-    CHECK(a.find_entry(ab) == nullptr);
-    CHECK(a.find_entry(aonly) == nullptr);
-}
-
-TEST_CASE("find_entry on an empty automaton is always null") {
-    Writer w;
-    w.put_u8(0);
-    w.put<std::uint32_t>(0);
-    auto a = parse(w.bytes);
-    const std::vector<CharId> any{1, 2, 3};
-    CHECK(a.find_entry(any) == nullptr);
+    CHECK(match_all(a, text).empty());
 }
 
 TEST_CASE("absent dictionary parses to empty automaton") {
@@ -281,7 +182,7 @@ TEST_CASE("absent dictionary parses to empty automaton") {
     CHECK(a.empty());
     CHECK(r.eof());  // nothing beyond the two header fields was consumed
     std::vector<CharId> text{1, 2, 3};
-    CHECK(a.match_all(text).empty());
+    CHECK(match_all(a, text).empty());
 }
 
 // Malformed-input rejection. Each case below is a two-state automaton that is
@@ -343,8 +244,9 @@ std::vector<std::byte> build_fixture(const Fixture& c) {
 TEST_CASE("the uncorrupted rejection fixture is itself well-formed") {
     auto a = parse(build_fixture(Fixture{}));
     const std::vector<CharId> text{2};
-    REQUIRE(a.find_entry(text) != nullptr);
-    CHECK(*a.find_entry(text) == 700);
+    const auto m = match_all(a, text);
+    REQUIRE(m.size() == 1);
+    CHECK(*m[0].payload == 700);
 }
 
 TEST_CASE("malformed automata are rejected, not built") {

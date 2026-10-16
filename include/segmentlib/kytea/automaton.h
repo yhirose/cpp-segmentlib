@@ -41,11 +41,6 @@ namespace segmentlib::kytea {
 template <class Payload>
 class Automaton {
 public:
-    struct Match {
-        std::size_t end_pos;      // index of the last character of the match
-        const Payload* payload;
-    };
-
     Automaton() = default;
 
     // read()'s default payload check: accepts everything.
@@ -117,7 +112,7 @@ public:
                 o = r.read<std::uint32_t>();
                 out_bound = std::max(out_bound, std::uint64_t{o} + 1);
             }
-            s.is_branch = r.read_bool();  // marks a genuine word-end (see find_entry)
+            static_cast<void>(r.read_bool());  // isBranch (not needed for matching)
         }
         const auto n_entries = r.read<std::uint32_t>();
         if (out_bound > n_entries) {
@@ -136,7 +131,6 @@ public:
 
     [[nodiscard]] bool empty() const noexcept { return num_states_ == 0; }
     [[nodiscard]] std::size_t num_states() const noexcept { return num_states_; }
-    [[nodiscard]] std::size_t num_units() const noexcept { return unit_.size(); }
     [[nodiscard]] std::size_t num_payloads() const noexcept { return payloads_.size(); }
     [[nodiscard]] std::uint8_t num_dicts() const noexcept { return num_dicts_; }
     [[nodiscard]] const Payload& payload(std::size_t i) const { return payloads_[i]; }
@@ -166,47 +160,10 @@ public:
         }
     }
 
-    // Exact whole-string lookup: returns the payload of the entry whose key is
-    // exactly `str`, or nullptr if no such entry exists. Mirrors KyTea's
-    // Dictionary::findEntry — it walks goto transitions
-    // only (never failure links), then accepts only if the state reached is a
-    // genuine word-end (is_branch) with its own output. The is_branch check is
-    // essential: suffix-link output propagation can leave a non-word-end state
-    // with a non-empty output (inherited from a proper suffix that *is* a
-    // word), and that must not count as an exact match. The entry is
-    // out_flat_'s first output for the state — the state's own entry, since
-    // propagated outputs are appended after it (== KyTea's output[0]).
-    [[nodiscard]] const Payload* find_entry(Span<const CharId> str) const {
-        if (str.empty() || num_states_ == 0) {
-            return nullptr;
-        }
-        std::uint32_t state = 0;
-        std::size_t lev = 0;
-        do {
-            const CharId c = str[lev++];
-            const std::uint32_t next = (state == 0) ? root_step(c) : step(state, c);
-            state = (next == kNoState) ? 0 : next;
-        } while (state != 0 && lev < str.size());
-        if (out_offset_[state] == out_offset_[state + 1] || !is_branch_[state]) {
-            return nullptr;
-        }
-        return &payloads_[out_flat_[out_offset_[state]]];
-    }
-
-    // Convenience wrapper that collects all matches into a vector.
-    [[nodiscard]] std::vector<Match> match_all(Span<const CharId> text) const {
-        std::vector<Match> result;
-        match(text, [&](std::size_t pos, const Payload& p) {
-            result.push_back(Match{pos, &p});
-        });
-        return result;
-    }
-
 private:
-    // "no owner" marker for a cell's check / "no transition" result of step().
+    // "no owner" marker for a cell's check, "no transition" result of step(),
+    // and "end of list" in the construction-time free list.
     static constexpr std::uint32_t kNoState = std::numeric_limits<std::uint32_t>::max();
-    // "end of list" marker for the construction-time free list.
-    static constexpr std::uint32_t kNull = std::numeric_limits<std::uint32_t>::max();
     // Marks a free slot abandoned during construction to bound the free list:
     // the fit test treats it as occupied (never reused) and, being distinct from
     // every real state id, it never matches in step().
@@ -234,7 +191,6 @@ private:
         std::uint32_t failure = 0;
         std::vector<std::pair<CharId, std::uint32_t>> gotos;  // sorted by CharId
         std::vector<std::uint32_t> outputs;                   // indices into payloads_
-        bool is_branch = false;                               // genuine word-end state
     };
 
     // Follows the goto transition for `c` from `state`; kNoState if none. In the
@@ -277,13 +233,13 @@ private:
     template <class CheckPayload>
     void build_canonical(std::vector<TempState>& temp, CheckPayload& check_payload) {
         const std::size_t n = num_states_;
-        std::vector<std::uint32_t> new_id(n, kNull);
+        std::vector<std::uint32_t> new_id(n, kNoState);
         std::vector<std::uint32_t> depth(n, 0);
 
         std::vector<std::uint32_t> free_next;
         std::vector<std::uint32_t> free_prev;
-        std::uint32_t free_head = kNull;
-        std::uint32_t free_tail = kNull;
+        std::uint32_t free_head = kNoState;
+        std::uint32_t free_tail = kNoState;
         std::size_t free_len = 0;
 
         const auto grow = [&](std::size_t new_size) {
@@ -292,12 +248,12 @@ private:
                 return;
             }
             unit_.resize(new_size, Cell{0, kNoState});
-            free_next.resize(new_size, kNull);
-            free_prev.resize(new_size, kNull);
+            free_next.resize(new_size, kNoState);
+            free_prev.resize(new_size, kNoState);
             for (std::size_t j = old; j < new_size; ++j) {
                 free_prev[j] = free_tail;
-                free_next[j] = kNull;
-                if (free_tail != kNull) {
+                free_next[j] = kNoState;
+                if (free_tail != kNoState) {
                     free_next[free_tail] = static_cast<std::uint32_t>(j);
                 } else {
                     free_head = static_cast<std::uint32_t>(j);
@@ -309,12 +265,12 @@ private:
         const auto unlink = [&](std::uint32_t j) {
             const std::uint32_t p = free_prev[j];
             const std::uint32_t nx = free_next[j];
-            if (p != kNull) {
+            if (p != kNoState) {
                 free_next[p] = nx;
             } else {
                 free_head = nx;
             }
-            if (nx != kNull) {
+            if (nx != kNoState) {
                 free_prev[nx] = p;
             } else {
                 free_tail = p;
@@ -357,7 +313,7 @@ private:
             // children. Because all children are >= first, no child can fall
             // below f, so none can land on an abandoned (lower-index) slot.
             std::int64_t base = -1;
-            for (std::uint32_t f = free_head; f != kNull; f = free_next[f]) {
+            for (std::uint32_t f = free_head; f != kNoState; f = free_next[f]) {
                 if (f < first) {
                     continue;  // would make base negative for the first child
                 }
@@ -389,7 +345,7 @@ private:
                     grow(slot + 1);
                 }
                 // Not a tree: the state would be re-pushed forever.
-                if (new_id[child_old] != kNull) {
+                if (new_id[child_old] != kNoState) {
                     throw bytes::ParseError("automaton goto graph is not a tree");
                 }
                 unlink(static_cast<std::uint32_t>(slot));
@@ -402,12 +358,12 @@ private:
         }
 
         // Every state must have been reached by the DFS above, or its new id is
-        // still kNull and the remap below would index fail_/out_offset_ at
+        // still kNoState and the remap below would index fail_/out_offset_ at
         // 2^32-1. A well-formed Aho-Corasick automaton is fully reachable from
         // the root by goto edges, so an unreachable state means a malformed
         // file, not a shape this build can represent.
         for (const auto id : new_id) {
-            if (id == kNull) {
+            if (id == kNoState) {
                 throw bytes::ParseError("automaton has a state unreachable from the root");
             }
         }
@@ -417,7 +373,6 @@ private:
         const std::size_t units = unit_.size();
         fail_.assign(units, 0);
         out_offset_.assign(units + 1, 0);
-        is_branch_.assign(units, 0);
         for (std::size_t s = 0; s < n; ++s) {
             // match() terminates only if each failure link shortens the match.
             if (s != 0 && depth[temp[s].failure] >= depth[s]) {
@@ -426,7 +381,6 @@ private:
             const std::uint32_t ns = new_id[s];
             fail_[ns] = new_id[temp[s].failure];
             out_offset_[ns + 1] = static_cast<std::uint32_t>(temp[s].outputs.size());
-            is_branch_[ns] = temp[s].is_branch ? 1 : 0;
         }
         for (std::size_t i = 1; i <= units; ++i) {
             out_offset_[i] += out_offset_[i - 1];
@@ -475,7 +429,6 @@ private:
     std::vector<std::uint32_t> fail_;
     std::vector<std::uint32_t> out_offset_;  // size units + 1
     std::vector<std::uint32_t> out_flat_;    // payload indices, grouped by state
-    std::vector<char> is_branch_;            // per state: genuine word-end (find_entry)
 
     std::vector<Payload> payloads_;
     std::uint8_t num_dicts_ = 0;
