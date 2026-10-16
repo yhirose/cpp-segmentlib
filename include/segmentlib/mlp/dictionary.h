@@ -230,6 +230,21 @@ inline void write_compiled_dictionaries(bytes::BinaryWriter& out,
     }
 }
 
+// Whether byte code read from a model file is safe to hand to fst::map.
+// cpp-fstlib's matcher checks only the trailer and header when it opens a
+// byte code, then follows the start address (already while constructing, to
+// build its root dispatch) without a bounds check. So that address must lie
+// inside the body, and verify() (the body hash) rules out a corrupted body. A
+// hash is no defense against a deliberately crafted file; that needs
+// bounds-checked matching in cpp-fstlib itself.
+[[nodiscard]] inline bool fst_byte_code_intact(const std::string& byte_code) {
+    fst::FstHeader header;
+    fst::FstTrailer trailer;
+    return fst::read_header(byte_code.data(), byte_code.size(), header, trailer) &&
+           header.start_address < trailer.body_size &&
+           fst::verify(byte_code.data(), byte_code.size());
+}
+
 [[nodiscard]] inline CompiledDictionaries read_compiled_dictionaries(
     bytes::BinaryReader& in, std::uint32_t num_dicts) {
     CompiledDictionaries out;
@@ -286,16 +301,11 @@ public:
     // file here, so valid() reports whether it parsed.
     explicit DictMatcher(CompiledDictionaries compiled)
         : num_dicts_(compiled.num_dicts) {
-        if (compiled.fst.empty()) {
-            return;
+        if (!compiled.fst.empty()) {
+            impl_ = std::make_unique<Impl>(std::move(compiled.fst),
+                                           std::move(compiled.offsets),
+                                           std::move(compiled.dicts));
         }
-        if (!intact(compiled.fst)) {
-            corrupt_ = true;
-            return;
-        }
-        impl_ = std::make_unique<Impl>(std::move(compiled.fst),
-                                       std::move(compiled.offsets),
-                                       std::move(compiled.dicts));
     }
 
     ~DictMatcher() = default;
@@ -304,8 +314,7 @@ public:
 
     DictMatcher(const DictMatcher& other)
         : impl_(other.impl_ ? std::make_unique<Impl>(*other.impl_) : nullptr),
-          num_dicts_(other.num_dicts_),
-          corrupt_(other.corrupt_) {}
+          num_dicts_(other.num_dicts_) {}
 
     DictMatcher& operator=(const DictMatcher& other) {
         // Copy-and-move, so how a matcher is duplicated stays in one place above.
@@ -318,7 +327,7 @@ public:
     // constructor is not a usable FST, which a corrupt model file can produce
     // and a locally compiled dictionary cannot.
     [[nodiscard]] bool valid() const noexcept {
-        return !corrupt_ && (!impl_ || static_cast<bool>(impl_->matcher));
+        return !impl_ || static_cast<bool>(impl_->matcher);
     }
 
     [[nodiscard]] std::uint32_t num_dicts() const noexcept { return num_dicts_; }
@@ -418,20 +427,6 @@ public:
     }
 
 private:
-    // cpp-fstlib's matcher checks only the trailer and header when it opens a
-    // byte code, then follows the start address — already while constructing,
-    // to build its root dispatch — without a bounds check. So that address
-    // must lie inside the body, and verify() (the body hash) rules out a
-    // corrupted body. A hash is no defense against a deliberately crafted
-    // file; that needs bounds-checked matching in cpp-fstlib itself.
-    [[nodiscard]] static bool intact(const std::string& byte_code) {
-        fst::FstHeader header;
-        fst::FstTrailer trailer;
-        return fst::read_header(byte_code.data(), byte_code.size(), header, trailer) &&
-               header.start_address < trailer.body_size &&
-               fst::verify(byte_code.data(), byte_code.size());
-    }
-
     // The compiled automaton. fst::map views the byte code rather than owning it,
     // so the two live together and a copy recompiles the view over its own bytes.
     // Held through unique_ptr so that address stays fixed: moving an Impl by
@@ -456,7 +451,6 @@ private:
 
     std::unique_ptr<Impl> impl_;  // null when there is nothing to match
     std::uint32_t num_dicts_ = 0;
-    bool corrupt_ = false;  // the byte code failed intact(); impl_ is null
 };
 
 }  // namespace segmentlib::mlp

@@ -5,8 +5,6 @@
 #include <filesystem>
 #include <functional>
 #include <limits>
-#include <new>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -230,11 +228,6 @@ public:
             return Model(parse(r));
         } catch (const bytes::ParseError&) {
             return Unexpected(Error{ErrorCode::MalformedModel, "malformed KyTea model"});
-        } catch (const std::bad_alloc&) {
-            // A count the file declares can still be too large to allocate.
-            return Unexpected(Error{ErrorCode::MalformedModel, "KyTea model too large to load"});
-        } catch (const std::length_error&) {
-            return Unexpected(Error{ErrorCode::MalformedModel, "KyTea model too large to load"});
         }
     }
 

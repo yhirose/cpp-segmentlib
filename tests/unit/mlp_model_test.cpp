@@ -339,9 +339,3 @@ TEST_CASE("load rejects a dictionary FST whose body fails its hash") {
     REQUIRE(!model.has_value());
     CHECK(model.error().code == ErrorCode::MalformedModel);
 }
-
-TEST_CASE("load reports a directory as an I/O error") {
-    const auto model = Model::load(".");
-    REQUIRE(!model.has_value());
-    CHECK(model.error().code == ErrorCode::IoError);
-}

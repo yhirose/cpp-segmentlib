@@ -6,7 +6,6 @@
 #include <cstdio>
 #include <filesystem>
 #include <new>
-#include <stdexcept>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -130,10 +129,10 @@ public:
         } catch (const bytes::ParseError&) {
             return Unexpected(Error{ErrorCode::MalformedModel, format.malformed});
         } catch (const std::bad_alloc&) {
-            // The precompute table is V × 2w × H, sized from header fields, so a
-            // small file can still ask for more than can be allocated.
-            return Unexpected(Error{ErrorCode::MalformedModel, "model too large to load"});
-        } catch (const std::length_error&) {
+            // Every count read is checked against the bytes left in the file,
+            // except the precompute table's: it is V × 2w × H, sized from
+            // header fields, so a small file can still ask for more memory
+            // than there is.
             return Unexpected(Error{ErrorCode::MalformedModel, "model too large to load"});
         }
     }
@@ -310,6 +309,9 @@ private:
         CompiledDictionaries compiled;
         if (c.num_dicts > 0) {
             compiled = read_compiled_dictionaries(in, c.num_dicts);
+            if (!compiled.fst.empty() && !fst_byte_code_intact(compiled.fst)) {
+                throw ParseError("dictionary FST is corrupt");
+            }
         }
         if (!in.eof()) {
             throw ParseError("trailing bytes after the model");

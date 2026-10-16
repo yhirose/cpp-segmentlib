@@ -134,14 +134,7 @@ public:
         for (std::uint32_t i = 0; i < n_entries; ++i) {
             a.payloads_.push_back(read_payload(r));
         }
-        const std::vector<std::uint32_t> depth = a.build(temp);
-        for (std::size_t s = 0; s < temp.size(); ++s) {
-            for (const std::uint32_t o : temp[s].outputs) {
-                if (!check_payload(a.payloads_[o], depth[s])) {
-                    throw bytes::ParseError("automaton payload inconsistent with its state");
-                }
-            }
-        }
+        a.build(temp, check_payload);
         return a;
     }
 
@@ -267,13 +260,13 @@ private:
         return c < root_next_.size() ? root_next_[c] : kNoState;
     }
 
-    // Returns each state's depth, indexed by its on-disk id.
-    std::vector<std::uint32_t> build(std::vector<TempState>& temp) {
+    template <class CheckPayload>
+    void build(std::vector<TempState>& temp, CheckPayload& check_payload) {
         num_states_ = temp.size();
         if (num_states_ == 0) {
-            return {};
+            return;
         }
-        return build_canonical(temp);
+        build_canonical(temp, check_payload);
     }
 
     // Builds the canonical double-array: each state is renamed to the slot it
@@ -284,9 +277,10 @@ private:
     // processed (parent before child), and, by keeping each subtree's nodes
     // contiguous, keeps the free-list frontier local so the base search stays
     // cheap (BFS order scatters siblings and multiplies collisions ~5x). Failure
-    // links and outputs are then remapped into the new ids. Returns each
-    // state's depth, indexed by its on-disk id.
-    std::vector<std::uint32_t> build_canonical(std::vector<TempState>& temp) {
+    // links and outputs are then remapped into the new ids; the depth-based
+    // checks (failure links, check_payload) ride along on those loops.
+    template <class CheckPayload>
+    void build_canonical(std::vector<TempState>& temp, CheckPayload& check_payload) {
         const std::size_t n = num_states_;
         std::vector<std::uint32_t> new_id(n, kNull);
         std::vector<std::uint32_t> depth(n, 0);
@@ -424,15 +418,6 @@ private:
                 throw bytes::ParseError("automaton has a state unreachable from the root");
             }
         }
-        // match() follows failure links until a transition succeeds or the root
-        // is reached; that terminates only if every link strictly shortens the
-        // match, as a real Aho-Corasick failure link (a proper suffix) does.
-        // The root's own link is never followed.
-        for (std::size_t s = 1; s < n; ++s) {
-            if (depth[temp[s].failure] >= depth[s]) {
-                throw bytes::ParseError("automaton failure link does not shorten the match");
-            }
-        }
 
         // Remap failure links and outputs into the canonical id space, indexed
         // by unit (so unused slots leave harmless zero-length output ranges).
@@ -441,6 +426,13 @@ private:
         out_offset_.assign(units + 1, 0);
         is_branch_.assign(units, 0);
         for (std::size_t s = 0; s < n; ++s) {
+            // match() follows failure links until a transition succeeds or the
+            // root is reached; that terminates only if every link strictly
+            // shortens the match, as a real Aho-Corasick failure link (a proper
+            // suffix) does. The root's own link is never followed.
+            if (s != 0 && depth[temp[s].failure] >= depth[s]) {
+                throw bytes::ParseError("automaton failure link does not shorten the match");
+            }
             const std::uint32_t ns = new_id[s];
             fail_[ns] = new_id[temp[s].failure];
             out_offset_[ns + 1] = static_cast<std::uint32_t>(temp[s].outputs.size());
@@ -451,6 +443,11 @@ private:
         }
         out_flat_.resize(out_offset_[units]);
         for (std::size_t s = 0; s < n; ++s) {
+            for (const std::uint32_t o : temp[s].outputs) {
+                if (!check_payload(payloads_[o], depth[s])) {
+                    throw bytes::ParseError("automaton payload inconsistent with its state");
+                }
+            }
             const std::uint32_t ns = new_id[s];
             std::copy(temp[s].outputs.begin(), temp[s].outputs.end(),
                       out_flat_.begin() + out_offset_[ns]);
@@ -466,7 +463,6 @@ private:
                 root_next_[c] = new_id[child_old];
             }
         }
-        return depth;
     }
 
     std::size_t num_states_ = 0;  // logical state count (units may exceed it)

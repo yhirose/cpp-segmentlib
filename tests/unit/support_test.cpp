@@ -10,6 +10,7 @@
 
 #include "segmentlib/segmenter.h"
 #include "segmentlib/support/expected.h"
+#include "segmentlib/support/file.h"
 #include "segmentlib/support/span.h"
 
 using namespace segmentlib;
@@ -175,4 +176,12 @@ TEST_CASE("run_batch keeps input order and rethrows a worker's exception") {
                             }),
                         std::runtime_error);
     }
+}
+
+TEST_CASE("read_model_file reports a directory as an I/O error") {
+    // A directory opens as an ifstream on Linux and then reports a size near
+    // 2^63, which used to surface as std::bad_alloc from every backend's load.
+    const auto data = segmentlib::detail::read_model_file(".");
+    REQUIRE(!data.has_value());
+    CHECK(data.error().code == ErrorCode::IoError);
 }

@@ -241,9 +241,3 @@ TEST_CASE("Model rejects dictionaries the scorer would index out of bounds") {
         CHECK(!load(dv, x).has_value());
     }
 }
-
-TEST_CASE("Model::load reports a directory as an I/O error") {
-    auto model = Model::load(".");
-    REQUIRE_FALSE(model.has_value());
-    CHECK(model.error().code == ErrorCode::IoError);
-}
