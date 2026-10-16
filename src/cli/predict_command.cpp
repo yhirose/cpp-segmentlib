@@ -138,9 +138,20 @@ int run_predict(std::span<const std::string_view> args) {
                 return 1;
             }
             write_segments(*results[i], lines[i], out);
-            std::fwrite(out.data(), 1, out.size(), stdout);
+            if (std::fwrite(out.data(), 1, out.size(), stdout) != out.size()) {
+                std::println(stderr, "predict: error writing output");
+                return 1;
+            }
         }
         line_no += lines.size();
+    }
+    if (std::cin.bad()) {
+        std::println(stderr, "predict: error reading input");
+        return 1;
+    }
+    if (std::fflush(stdout) != 0 || std::ferror(stdout)) {
+        std::println(stderr, "predict: error writing output");
+        return 1;
     }
     return 0;
 }

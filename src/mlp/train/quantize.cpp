@@ -61,7 +61,7 @@ struct Int16Reference {
         const std::uint32_t m = set.sentence_egcs(ex.sentence);
 
         std::vector<std::int32_t> acc(b1_q);
-        std::vector<std::int32_t> sum_c(d);
+        std::vector<std::int64_t> sum_c(d);
 
         // First layer: fallback synthesis I.1-(2) for every slot (the
         // frequent-EGC table of 5.6 is a cache of exactly this computation).
@@ -76,7 +76,7 @@ struct Int16Reference {
             }
             const auto n = static_cast<double>(rows.size());
             for (std::size_t k = 0; k < d; ++k) {
-                std::int32_t s = 0;
+                std::int64_t s = 0;  // an EGC can be an unbounded run of marks
                 for (const std::uint32_t row : rows) {
                     s += q.embedding[static_cast<std::size_t>(row) * d + k];
                 }

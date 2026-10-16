@@ -19,7 +19,10 @@ int run_train(std::span<const std::string_view> /*args*/) {
 
 #else
 
+#include <cctype>
+#include <cerrno>
 #include <charconv>
+#include <cmath>
 #include <cstdint>
 #include <cstdlib>
 #include <filesystem>
@@ -91,8 +94,10 @@ bool parse_number(std::string_view v, T& out) {
         // copy but has no such gate.
         const std::string s(v);
         char* end = nullptr;
+        errno = 0;
         out = std::strtof(s.c_str(), &end);
-        return end == s.c_str() + s.size() && !s.empty();
+        return end == s.c_str() + s.size() && !s.empty() && !std::isspace(static_cast<unsigned char>(s[0])) &&
+               errno != ERANGE && std::isfinite(out);
     } else {
         const auto [ptr, ec] = std::from_chars(v.data(), v.data() + v.size(), out);
         return ec == std::errc{} && ptr == v.data() + v.size();
@@ -188,6 +193,15 @@ Options parse(std::span<const std::string_view> args) {
         !(opt.ed_feedback_decay > 0.0f && opt.ed_feedback_decay < 1.0f)) {
         // Zero never converges the feedback; one wipes both weights each step.
         std::println(stderr, "train: --ed-feedback-decay must be in (0, 1)");
+        opt.ok = false;
+    }
+    if (!(opt.lr > 0.0f)) {
+        std::println(stderr, "train: --lr must be positive");
+        opt.ok = false;
+    }
+    if (opt.backend != "ed" && (opt.ed_feedback_decay != kEdlaDefaults.feedback_decay ||
+                                opt.ed_feedback_init != kEdlaDefaults.feedback_init)) {
+        std::println(stderr, "train: --ed-feedback-* apply to --backend ed");
         opt.ok = false;
     }
     if (opt.model_out.empty()) {
