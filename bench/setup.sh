@@ -2,10 +2,13 @@
 # One-time benchmark setup:
 #   1. fetch + clean an Aozora Bunko corpus (real Japanese prose),
 #   2. build Vaporetto (predict + convert_kytea_model),
-#   3. convert the KyTea model to Vaporetto's format.
+#   3. convert the KyTea model to Vaporetto's format,
+#   4. build bench_kytea, KyTea's in-process harness, against libkytea.
 #
-# Requirements: curl, python3, cargo, and the KyTea model already fetched
-# (scripts/fetch_kytea_model.sh).
+# Requirements: curl, python3, cargo, a C++ compiler, an installed KyTea (the
+# `kytea` command and libkytea, e.g. `brew install kytea`; set KYTEA_PREFIX
+# if it is not under Homebrew or /usr/local), and the KyTea model already
+# fetched (scripts/fetch_kytea_model.sh).
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -52,6 +55,23 @@ fi
 if [[ ! -f "$VMODEL" ]]; then
     echo "Converting KyTea model to Vaporetto format..."
     "$VENDOR/convert_kytea_model" --model-in "$KMODEL" --model-out "$VMODEL"
+fi
+
+# --- 4. bench_kytea -----------------------------------------------------
+if [[ ! -x "$VENDOR/bench_kytea" ]]; then
+    # --installed: plain `brew --prefix kytea` prints Homebrew's path even
+    # when KyTea is not installed there, which would hide /usr/local.
+    prefix="${KYTEA_PREFIX:-$(brew --prefix --installed kytea 2>/dev/null || echo /usr/local)}"
+    if [[ ! -f "$prefix/include/kytea/kytea.h" ]]; then
+        echo "KyTea headers not found under $prefix; install KyTea or set KYTEA_PREFIX." >&2
+        exit 1
+    fi
+    echo "Building bench_kytea against $prefix..."
+    # -w: libkytea's own headers are not warning-clean. The rpath lets run.sh
+    # start it without a library search path.
+    "${CXX:-c++}" -std=c++17 -O2 -w bench/bench_kytea.cpp \
+        -I"$prefix/include" -L"$prefix/lib" -Wl,-rpath,"$prefix/lib" -lkytea \
+        -o "$VENDOR/bench_kytea"
 fi
 
 echo "Setup complete. Run: bench/run.sh"

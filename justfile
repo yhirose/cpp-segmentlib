@@ -99,15 +99,18 @@ eval-ed: build
             | grep 'P='; \
     done
 
-# Inference speed and load time of the reference model, measured in-process
-bench:
+# Configure and build the Release build the benchmarks time
+bench-build:
     @test -d {{bench_dir}} || cmake -S . -B {{bench_dir}} -DCMAKE_BUILD_TYPE=Release \
         -DSEGMENTLIB_BUILD_TESTS=OFF -DSEGMENTLIB_BUILD_TRAINING=OFF
     @cmake --build {{bench_dir}} --parallel
+
+# Inference speed and load time of the reference model, measured in-process
+bench: bench-build
     {{bench_dir}}/bench/bench_segment {{model}} {{corpus_dir}}/train.raw.txt 12
 
 # The three-way comparison against KyTea and Vaporetto (setup: bench/README.md)
-bench-all:
+bench-all: bench-build
     bench/run.sh
 
 # Remove the build directories

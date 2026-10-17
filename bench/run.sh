@@ -9,7 +9,7 @@
 #   3. Pure inference speed is measured IN-PROCESS (model loaded once, the
 #      tokenize loop timed, model load and I/O excluded) — the only way to
 #      isolate inference. A CLI wall-clock comparison, dominated by load and I/O
-#      here, cannot. End-to-end CLI wall time is reported separately.
+#      here, cannot.
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -68,15 +68,15 @@ OURS_OUT=$("$BENCH_SEGMENT" "$KMODEL" "$CORPUS" "$ITERS")
 OURS_MCPS=$(echo "$OURS_OUT" | parse_speed); OURS_LOAD=$(echo "$OURS_OUT" | parse_load)
 
 if [[ -x "$BENCH_KYTEA" ]]; then
-    K_OUT2=$(DYLD_LIBRARY_PATH=/opt/homebrew/lib "$BENCH_KYTEA" "$KMODEL" "$CORPUS" "$ITERS")
+    K_OUT2=$("$BENCH_KYTEA" "$KMODEL" "$CORPUS" "$ITERS")
     K_MCPS=$(echo "$K_OUT2" | parse_speed); K_LOAD=$(echo "$K_OUT2" | parse_load)
 else
     K_MCPS="n/a"; K_LOAD="n/a"
 fi
 
 # Vaporetto reports its own tokenization time ("Elapsed") on stderr; take the
-# best of a few runs. Its load is the wall time minus that.
-V_BEST=1e9; V_LOAD="n/a"
+# best of a few runs.
+V_BEST=1e9
 for _ in 1 2 3 4 5; do
     ELAPSED=$("$VAPORETTO" --model "$VMODEL" < "$CORPUS" 2>&1 >/dev/null \
         | grep -oE 'Elapsed:[[:space:]]*[0-9.]+' | grep -oE '[0-9.]+' || true)
