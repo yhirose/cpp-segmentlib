@@ -1,10 +1,10 @@
 #!/usr/bin/env bash
 # Downloads UD_Japanese-GSD (CC BY-SA 4.0) and converts it to KyTea
-# full-annotation format (design.ja.md 6.1) for MLP/KyTea training and
-# evaluation (design.ja.md 5.8, memory mlp-eval-corpus): the corpus KyTea's
-# distributed model was trained on (BCCWJ) is license-restricted and
-# unobtainable, so this freely-licensed treebank — built on the same
-# UniDic short-unit segmentation standard — stands in for it.
+# full-annotation format (design.ja.md 5.1) for MLP/KyTea training and
+# evaluation (design.ja.md 4.8): the corpus KyTea's distributed model was
+# trained on (BCCWJ) is license-restricted and unobtainable, so this
+# freely-licensed treebank — built on the same UniDic short-unit
+# segmentation standard — stands in for it.
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"

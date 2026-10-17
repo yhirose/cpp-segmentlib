@@ -1,12 +1,13 @@
-# Build + test across the SIMD kernel dispatch targets (mlp_impl_design.ja.md
-# I.3): NEON on Apple Silicon, AVX2 and scalar on x86_64 Linux, MSVC/AVX2 on
-# Windows (best-effort, design.ja.md 5.9). The kernels test asserts the
+# Build + test across the SIMD kernel dispatch targets (design.ja.md 4.6):
+# NEON on Apple Silicon, AVX2 and scalar on x86_64 Linux, MSVC/AVX2 on
+# Windows (best-effort, design.ja.md 4.9). The kernels test asserts the
 # dispatched path is bit-exact with the scalar oracle, so each runner verifies
 # its own SIMD path on real hardware.
 #
-# Two jobs sit outside that matrix: `sanitizers` (ASan + UBSan, the only build
-# here with assertions on) and `golden`, which fetches the KyTea model so the
-# byte-parity tests actually run instead of skipping themselves.
+# Three jobs sit outside that matrix: `sanitizers` (ASan + UBSan, the only
+# build here with assertions on), `golden`, which fetches the KyTea model so
+# the byte-parity tests actually run instead of skipping themselves, and
+# `consumer`, which builds segmentlib the way a downstream project does.
 name: CI
 
 on:
@@ -39,7 +40,7 @@ jobs:
       - name: Install dependencies (Linux)
         if: runner.os == 'Linux'
         # GCC 14 for C++23 (std::print / std::expected); OpenBLAS for the
-        # training target (the only place BLAS links, design.ja.md 5.9).
+        # training target (the only place BLAS links, design.ja.md 4.9).
         run: |
           sudo apt-get update
           sudo apt-get install -y g++-14 libopenblas-dev ninja-build
@@ -160,7 +161,7 @@ jobs:
         env:
           CXX: g++-14
 
-  # Windows is best-effort (design.ja.md 5.9): MSVC's C++23 coverage is
+  # Windows is best-effort (design.ja.md 4.9): MSVC's C++23 coverage is
   # believed sufficient but has never been exercised, so this job reports
   # without blocking the workflow. Training stays off (no easy BLAS); the
   # inference tests — including the AVX2-vs-scalar kernels check under

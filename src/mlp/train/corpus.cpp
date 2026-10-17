@@ -21,7 +21,7 @@ constexpr Error kLeadingSeparator{
     "partial-annotation line starts with a boundary mark"};
 
 // One codepoint of a corpus line, with KyTea's `\` escaping resolved
-// (design.ja.md 6節: escape applies to the delimiter characters).
+// (design.ja.md 5節: escape applies to the delimiter characters).
 struct Item {
     char32_t cp;
     bool escaped;

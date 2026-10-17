@@ -116,7 +116,7 @@ KyTeaのモデルは学習時の素性文字列→ID辞書をモデルファイ�
 KyTea <version> <T|B> <encoding>
 ```
 
-例：`KyTea 0.4.0 B utf8`。`version`は量子化ビルドでは`"0.4.0"`。フォーマット文字は`T`=テキスト、`B`=バイナリ。本ライブラリは`0.4.0`系のバイナリ形式のみを対象とする。2節のバックエンド自動判別が見るのはこの行ではなくMLP側のシグネチャで、`"SegmentLibMLP "`で始まらないファイルがこのパーサに回ってくる。
+例：`KyTea 0.4.0 B utf8`。`version`は量子化ビルドでは`"0.4.0"`。フォーマット文字は`T`=テキスト、`B`=バイナリ。本ライブラリは`0.4.0`系のバイナリ形式のみを対象とする。2節のバックエンド自動判別が見るのはこの行ではなく本ライブラリ独自形式のシグネチャで、`"SegmentLibMLP "`でも`"SegmentLibED "`でも始まらないファイルがこのパーサに回ってくる。
 
 **ファイル全体のセクション順序**
 
@@ -443,8 +443,8 @@ SegmentLibMLP <version>\n
      - マスク（部分アノテーションの不明位置は損失から除外, 4.5節）
 5. ミニバッチ化: 埋め込みgather → mean pooling → concat(2w·d)
 6. 順伝播 → BCE(マスク付き) → 逆伝播（埋め込みは疎勾配）
-7. 最適化: Adam
-8. 収束後: PTQ int16 量子化 → 検証（判定反転チェック, 4.5節）→ 5.7形式で書き出し
+7. 最適化: Adam（既定）または素のSGD（`--optimizer sgd`）
+8. 収束後: PTQ int16 量子化 → 検証（判定反転チェック, 4.5節）→ 4.7節の形式で書き出し
 ```
 
 **逆伝播の要点**
@@ -453,7 +453,7 @@ SegmentLibMLP <version>\n
 - **mean pooling → 埋め込み**：EGCベクトルが構成コードポイントのmeanなので、EGCベクトルへの勾配は各構成コードポイント行へ`1/(コードポイント数)`で分配される。**埋め込みテーブルの勾配は疎**（バッチに現れた行のみ）。Adamの1次・2次モーメントも現れた行だけ更新する。
 - 辞書二値素性`f_dict`への`W_dict`勾配も、立っている素性の列のみの疎更新。
 
-**最適化器**：Adam。
+**最適化器**：既定はAdam。代わりに素のSGD（`--optimizer sgd`、モーメンタムも減衰もなし）も選べる。EDLAとの比較で勾配のスケールを保つ対照実験として追加したもので（11.6節）、このタスクでは学習率を調整するとAdamを上回る（4.8節。計測のみで、既定には採用していない）。
 
 **量子化**：PTQ（Post-Training Quantization）で確定。QATは採用しない。
 
@@ -559,6 +559,7 @@ public:
     static Expected<Segmenter, Error> load(const std::filesystem::path& model_path);
     static Expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
     static Expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_ed(const std::filesystem::path& model_path);
 
     // Move-only: a Segmenter owns its model outright, so an implicit copy
     // would silently duplicate all of it (~400MB for the distributed KyTea
@@ -572,12 +573,15 @@ public:
 
     std::vector<Expected<Segments, Error>> tokenize_all(
         Span<const std::string_view> texts, unsigned threads = 0) const;
+
+    bool unicode_version_mismatch() const;
 };
 ```
 
 - 分かち書きのみを行う`tokenize()`一本。多数の入力を並列に分かち書きする`tokenize_all()`（`threads==0`でハードウェア並列数、9節：M1 Pro 8スレッドで44.98 M chars/sec、単スレッド比7.96×）。
 - 空文字列の入力は「エラーではなく空の結果」として扱う（`Segments{}`）。`Error`はUTF-8不正やモデル未読込・未対応形式などの実際の異常系のみに使う。
 - ロード済みの`Segmenter`は不変で、呼び出しごとの作業領域は`thread_local`なので、同一の`const Segmenter&`に対して任意個のスレッドから同時に`tokenize()` / `tokenize_all()`を呼べる。共有はコピーではなくこの形で行う。
+- `unicode_version_mismatch()`は、MLP/EDLAモデルがこのビルドと異なるUnicodeのEGCデータで学習されていたとき（4.7節フィールド4b）にtrueを返す。その差の影響を受けるクラスタは分割結果が変わりうる。KyTeaモデルでは常にfalse。ライブラリ自身は何も出力せず、警告するかどうかは呼び出し側が決める（`segmenter predict`は警告する。7.1節）。
 
 ## 7. CLIインターフェース
 
@@ -596,7 +600,7 @@ KyTea / Vaporettoと同様、**標準入力からテキストを読み、標準�
 
 | オプション | 説明 |
 |---|---|
-| `--model <path>` | モデルファイルのパス（必須）。KyTea互換／独自MLPのいずれかを自動判別する（2節） |
+| `--model <path>` | モデルファイルのパス（必須）。KyTea互換／独自MLP／EDLAのいずれかを自動判別する（2節） |
 | `--threads <n>` | 並列実行のスレッド数（`0`＝`hardware_concurrency()`、既定。上限1024） |
 
 **出力フォーマット**
@@ -610,6 +614,8 @@ KyTeaの分かち書き出力形式（スペース区切りの単語列）を踏
 **表層語のエスケープ（`showEscapedString`）**：区切り文字（スペース・`/`・`&`・エスケープ文字`\`自身）が単語表層に含まれる場合、`\`で前置してエスケープする（例：入力`Hello World` → `Hello \  World`、`2024/12/31` → `2024 \/ 12 \/ 31`）。実装は`append_full_line`（`include/segmentlib/output.h`）に集約し、CLIとgoldenテストで共有。
 
 **入力の扱い**：入力は常にUTF-8固定。不正なUTF-8バイト列は`CharTable::encode`/`Vocab::encode`が`ErrorCode::InvalidUtf8`を返し、CLIは該当行以前の出力をflushした上で即座に中断する（exit code 1・stderrにメッセージ）。
+
+**Unicodeバージョン**：モデルが異なる書記素データで学習されていたと`Segmenter::unicode_version_mismatch()`が報告した場合（6.3節）、stderrに警告を出したうえで分かち書きは続ける。
 
 ### 7.2 `segmenter train`（学習）
 
@@ -686,7 +692,8 @@ include/segmentlib/
 │   ├── expected.h              # Expected<T,E> / Unexpected<E>（std::expectedはC++23）
 │   ├── span.h                  # Span<T>（std::spanはC++20）
 │   ├── endian.h                # バイト順とbyteswap（std::endian/byteswapはC++20/23）
-│   └── attributes.h            # SEGMENTLIB_FLATTEN（ヘッダオンリー版ホットパスのインライン化ヒント）
+│   ├── attributes.h            # SEGMENTLIB_FLATTEN（ヘッダオンリー版ホットパスのインライン化ヒント）
+│   └── file.h                  # モデルローダが共用するファイル全体の読み込み
 ├── segmenter.h                 # (L6) 公開API（6節）
 ├── output.h                    # 出力整形（append_full_line）
 └── types.h                     # Segments/Error（6.2節、依存なし）
@@ -698,6 +705,7 @@ src/                            # 推論はヘッダオンリー。ここでコ�
 │   ├── dataset.{h,cpp}          # ミニバッチ化
 │   ├── net.{h,cpp}              # 順伝播・逆伝播
 │   ├── adam.{h,cpp}             # Adamオプティマイザ
+│   ├── sgd.{h,cpp}              # 素のSGD（`--optimizer sgd`、4.9節）
 │   ├── trainer.{h,cpp}          # 学習ループ
 │   ├── quantize.{h,cpp}         # PTQ int16量子化
 │   ├── exporter.{h,cpp}         # モデルファイル書き出し
@@ -728,7 +736,7 @@ src/                            # 推論はヘッダオンリー。ここでコ�
 
 **L5: `kytea::KyteaBackend`** — 2節で定義した`tokenize`シグネチャを満たすクラス。中身は`Model`を保持し、`scorer`の関数を呼ぶだけの薄いアダプタ。
 
-**L6: `Segmenter`** — 2節の設計そのまま。`std::variant<KyteaBackend, MlpBackend>`。
+**L6: `Segmenter`** — 2節の設計そのまま。`std::variant<KyteaBackend, MlpBackend, EdBackend>`。
 
 **CLI層** — `predict_command.cpp`は「引数パース→`Segmenter::load`→stdinを1行ずつ読んで`tokenize`→出力」というだけの薄いループ。ビジネスロジックを一切持たない。
 
@@ -737,19 +745,26 @@ src/                            # 推論はヘッダオンリー。ここでコ�
 ```
 cpp-segmentlib/
 ├── CMakeLists.txt                # トップレベル。C++23、サブディレクトリを束ねる
+├── justfile                      # ビルド・テスト・学習・評価・ベンチのレシピ
 ├── include/segmentlib/           # 公開ヘッダ（8.1節の構成）
 ├── src/                          # 実装（8.1節の構成）
-│   ├── CMakeLists.txt            # segmentlib（ライブラリ）のターゲット定義
+│   ├── CMakeLists.txt            # segmentlib（ヘッダオンリーのinterface）とsegmentlib_trainのターゲット定義
 │   └── cli/
 │       └── CMakeLists.txt        # segmenter（実行ファイル）のターゲット定義
+├── third_party/
+│   └── cpp-fstlib/               # vendoringしたFSTヘッダ（MIT）。`just vendor-update`で更新
 ├── tests/
 │   ├── CMakeLists.txt
 │   ├── unit/                     # モジュール単位のテスト
-│   ├── golden/                   # KyTea実バイナリの実出力と突き合わせるテスト
+│   ├── golden/                   # 分かち書き出力を固定するテスト
 │   │   ├── golden_test.cpp
-│   │   └── fixtures/
+│   │   ├── fixtures/
+│   │   │   ├── input.txt
+│   │   │   └── expected.txt      # `kytea -notags`の出力
+│   │   └── mlp_fixtures/
 │   │       ├── input.txt
-│   │       └── expected.txt      # `kytea -notags`の出力
+│   │       └── expected.txt      # 同梱MLPモデルの出力
+│   ├── data/                     # GraphemeBreakTest.txt（UAX #29の適合テストケース）
 │   └── consumer/                 # 利用側プロジェクトの模擬。check_consumer.shが
 │                                 # ビルドする。本体ビルドには含まれない
 ├── models/
@@ -765,14 +780,18 @@ cpp-segmentlib/
 │   ├── fetch_kytea_model.sh
 │   ├── fetch_ud_gsd_corpus.sh
 │   ├── fetch_ud_pud_corpus.sh
+│   ├── fetch_unidic_dict.sh
 │   ├── convert_ud_gsd_corpus.py
+│   ├── convert_unidic_dict.py
 │   ├── eval_segmentation.py
 │   ├── extract_dict.py
 │   ├── check_consumer.sh
 │   ├── gen_egc_table.py
-│   └── strip_kytea_tags.py
+│   ├── strip_kytea_tags.py
+│   ├── release.sh
+│   └── vendor_update_fstlib.sh
 ├── docs/
-│   └── design.ja.md / design.md
+│   └── design.ja.md / design.md / RELEASING.md
 ├── .github/workflows/ci.yml
 └── .gitignore
 ```
@@ -783,7 +802,7 @@ cpp-segmentlib/
 - **推論経路の依存は vendoring した1つだけ**：`third_party/cpp-fstlib`（ヘッダオンリー、MIT）。辞書マッチャ（4.4節）が使うFSTで、`mlp/dictionary.h` が `fst::map` を直接持ちincludeするため、ヘッダオンリーの推論経路を使う側も一緒にコンパイルすることになり、includeパスに `third_party/` が必要（`segmentlib` CMakeターゲットがSYSTEM interface includeとして持つ）。includeは `"cpp-fstlib/fstlib.h"` と書き、includeパスは `third_party/` にしてある。利用側プロジェクトがこれを隠すには `fstlib.h` というファイル名だけでなくディレクトリ名の一致まで必要になる。それ以外は標準ライブラリのみ。学習経路（`SEGMENTLIB_BUILD_TRAINING`）のみBLASをリンクする。
 - **テストフレームワークは`doctest`**（ヘッダオンリー、CMakeの`FetchContent`で取得）。
 - **`models/kytea/`・`corpus/`はgit管理しない**：`.gitignore`に追加し、`scripts/fetch_*.sh`のようなダウンロードスクリプトのみをリポジトリに置く。例外は`models/mlp/`（学習済みMLP参照モデル、約2.1MB、本プロジェクト自身の成果物）で、NOTICEと一緒にコミットし、cloneした直後にダウンロードも学習も無しで分かち書きが動くようにする。その出力は回帰テストで固定される。再学習はリリース時の行為（docs/RELEASING.md）。
-- **`golden/`テストは固定データ方式**：既知の入力文とKyTea実行結果のペアを`tests/golden/fixtures/`に固定データとしてコミットする。モデル未取得時はテストがスキップされる（CI耐性）。
+- **`golden/`テストは固定データ方式**：既知の入力文とKyTea実行結果のペアを`tests/golden/fixtures/`に固定データとしてコミットする。モデル未取得時はテストがスキップされる（CI耐性）。`tests/golden/mlp_fixtures/`も同様に同梱MLPモデルの出力を固定する。こちらはモデルがコミット済みなので常に実行され、再学習したときはfixtureも作り直す（docs/RELEASING.md）。
 
 ### 8.4 ビルド／ツールチェーン要件
 
@@ -799,8 +818,8 @@ cpp-segmentlib/
   ctest --test-dir build --output-on-failure
   ```
   ベンチマーク計測時は必ず`-DCMAKE_BUILD_TYPE=Release`を指定する（`Debug`構成では推論速度が数十倍遅くなる）。
-- **他プロジェクトからの利用**：`add_subdirectory()`または`FetchContent`で取り込み、`segmentlib`ターゲットにリンクする（公開includeパスは自動で伝播）。開発用ターゲット——テストスイート（doctestをネットワーク取得する）・ベンチマーク・`segmenter` CLI——は、単体ビルド時はON、**segmentlibが最上位プロジェクトでないときはOFF**が既定なので、利用側の`all`でビルドされるのは静的ライブラリ1つだけ。`CMAKE_BUILD_TYPE`の`Release`既定も同様に単体ビルド時のみ（`FetchContent`配下ではキャッシュは利用側のものだから）。install/exportセットは持たないため`find_package(segmentlib)`は非対応。
-- **CI**：`.github/workflows/ci.yml`。macOS arm64（NEON）・Linux x86_64（AVX2/scalar、GCC14+OpenBLAS）・Windows（MSVC、AVX2、best-effort）に加え、ASan+UBSanジョブ（assertion有効なのはこれだけ）、KyTeaモデルを取得（キャッシュ付き）して`SEGMENTLIB_REQUIRE_GOLDEN`を立てるgoldenジョブ（この環境変数によりモデル未取得はスキップではなく失敗になる）、そして`tests/consumer/`を作業ツリーに対してビルドし「利用側のビルドに入るのはライブラリだけ（テスト/ベンチ/CLIの成果物なし・doctest取得なし・ビルド種別を勝手に決めない）」を検査するconsumerジョブ（`scripts/check_consumer.sh`）の計7ジョブ。全ジョブ`-DSEGMENTLIB_WARNINGS_AS_ERRORS=ON`でビルド。
+- **他プロジェクトからの利用**：`add_subdirectory()`または`FetchContent`で取り込み、`segmentlib`ターゲットにリンクする（公開includeパスは自動で伝播）。開発用ターゲット——テストスイート（doctestをネットワーク取得する）・ベンチマーク・`segmenter` CLI——は、単体ビルド時はON、**segmentlibが最上位プロジェクトでないときはOFF**が既定なので、利用側の`all`ではsegmentlibのものは何もビルドされない（推論はヘッダオンリー）。`CMAKE_BUILD_TYPE`の`Release`既定も同様に単体ビルド時のみ（`FetchContent`配下ではキャッシュは利用側のものだから）。install/exportセットは持たないため`find_package(segmentlib)`は非対応。
+- **CI**：`.github/workflows/ci.yml`。macOS arm64（NEON）・Linux x86_64 AVX2・Linux x86_64 scalar（GCC14+OpenBLAS）・Windows（MSVC、AVX2、best-effort）に加え、ASan+UBSanジョブ（assertion有効なのはこれだけ）、KyTeaモデルを取得（キャッシュ付き）して`SEGMENTLIB_REQUIRE_GOLDEN`を立てるgoldenジョブ（この環境変数によりモデル未取得はスキップではなく失敗になる）、そして`tests/consumer/`を作業ツリーに対してビルドし「利用側のビルドに入るのはライブラリだけ（テスト/ベンチ/CLIの成果物なし・doctest取得なし・ビルド種別を勝手に決めない）」を検査するconsumerジョブ（`scripts/check_consumer.sh`、C++17とC++23の2本）の計8ジョブ。Windows（best-effort）とconsumer以外の全ジョブは`-DSEGMENTLIB_WARNINGS_AS_ERRORS=ON`でビルドする（手元では`just lint`が同じことをする）。consumerジョブは素朴な利用側プロジェクトを演じるため、あえてsegmentlibのオプションを何も渡さない。
 
 ## 9. ベンチマーク（推論速度）
 

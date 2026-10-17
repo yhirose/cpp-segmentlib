@@ -116,7 +116,7 @@ KyTea embeds the training-time feature-string→ID dictionary in the model file.
 KyTea <version> <T|B> <encoding>
 ```
 
-Example: `KyTea 0.4.0 B utf8`. `version` is `"0.4.0"` for quantized builds. The format character is `T`=text, `B`=binary. This library targets only the binary `0.4.0` format. Backend auto-detection (Section 2) keys on the MLP signature rather than this line: a file that does not start with `"SegmentLibMLP "` is handed to this parser.
+Example: `KyTea 0.4.0 B utf8`. `version` is `"0.4.0"` for quantized builds. The format character is `T`=text, `B`=binary. This library targets only the binary `0.4.0` format. Backend auto-detection (Section 2) keys on the native signatures rather than this line: a file that starts with neither `"SegmentLibMLP "` nor `"SegmentLibED "` is handed to this parser.
 
 **Overall section order**
 
@@ -443,7 +443,7 @@ The training engine is self-implemented in this library (no dependency on an ext
      - mask (partial-annotation unknown positions excluded from the loss, Section 4.5)
 5. Mini-batch: embedding gather → mean pooling → concat(2w·d)
 6. Forward pass → BCE (masked) → backward pass (embedding gradient is sparse)
-7. Optimize: Adam
+7. Optimize: Adam (default) or plain SGD (`--optimizer sgd`)
 8. After convergence: PTQ int16 quantization → verify (decision-flip check, Section 4.5) → write out in the Section 4.7 format
 ```
 
@@ -453,7 +453,7 @@ The training engine is self-implemented in this library (no dependency on an ext
 - **mean pooling → embedding**: since an EGC vector is the mean of its constituent codepoints, the gradient into the EGC vector is distributed to each constituent codepoint row at `1/(codepoint count)`. **The embedding table's gradient is sparse** (only rows that appeared in the batch). Adam's 1st/2nd moments are also updated only for rows that appeared.
 - The `W_dict` gradient into the dictionary binary feature `f_dict` is likewise a sparse update, only for the columns of set features.
 
-**Optimizer**: Adam.
+**Optimizer**: Adam by default. Plain SGD (`--optimizer sgd`, no momentum or decay) is the alternative: it was added as the scale-preserving control for the EDLA comparison (Section 11.6), and on this task it beats Adam once its learning rate is tuned (Section 4.8, measured but not adopted).
 
 **Quantization**: fixed on PTQ (Post-Training Quantization). QAT is not used.
 
@@ -560,6 +560,7 @@ public:
     static Expected<Segmenter, Error> load(const std::filesystem::path& model_path);
     static Expected<Segmenter, Error> load_kytea(const std::filesystem::path& model_path);
     static Expected<Segmenter, Error> load_mlp(const std::filesystem::path& model_path);
+    static Expected<Segmenter, Error> load_ed(const std::filesystem::path& model_path);
 
     // Move-only: a Segmenter owns its model outright, so an implicit copy
     // would silently duplicate all of it (~400MB for the distributed KyTea
@@ -573,12 +574,15 @@ public:
 
     std::vector<Expected<Segments, Error>> tokenize_all(
         Span<const std::string_view> texts, unsigned threads = 0) const;
+
+    bool unicode_version_mismatch() const;
 };
 ```
 
 - A single `tokenize()` covering segmentation only. `tokenize_all()` tokenizes many inputs in parallel (`threads == 0` uses hardware concurrency; Section 9: 44.98 M chars/sec at 8 threads on M1 Pro, 7.96x single-thread).
 - An empty-string input is treated as "not an error, but an empty result" (`Segments{}`). `Error` is used only for actual abnormal cases such as invalid UTF-8 or an unloaded/unsupported model.
 - A loaded `Segmenter` is immutable and its per-call scratch is `thread_local`, so any number of threads may call `tokenize()` / `tokenize_all()` concurrently on the same `const Segmenter&`. That, not copying, is how one is shared.
+- `unicode_version_mismatch()` is true when an MLP/EDLA model was trained with different Unicode EGC data than this build (Section 4.7 field 4b), so clusters affected by the difference may segment differently. It is always false for a KyTea model. The library prints nothing itself; whether to warn is the caller's decision (`segmenter predict` does, Section 7.1).
 
 ## 7. CLI Interface
 
@@ -597,7 +601,7 @@ As with KyTea / Vaporetto, this follows the **filter-style pattern of reading te
 
 | Option | Description |
 |---|---|
-| `--model <path>` | path to the model file (required). Auto-detects whether it is KyTea-compatible / custom MLP (Section 2) |
+| `--model <path>` | path to the model file (required). Auto-detects whether it is KyTea-compatible / custom MLP / EDLA (Section 2) |
 | `--threads <n>` | number of threads for parallel execution (`0` = `hardware_concurrency()`, default; capped at 1024) |
 
 **Output format**
@@ -611,6 +615,8 @@ Follows KyTea's segmentation output format (a space-separated word list).
 **Escaping the surface word (`showEscapedString`)**: when a delimiter character (space, `/`, `&`, or the escape character `\` itself) is included in a word's surface form, it is escaped by prefixing it with `\` (example: input `Hello World` → `Hello \  World`, `2024/12/31` → `2024 \/ 12 \/ 31`). The implementation is consolidated in `append_full_line` (`include/segmentlib/output.h`), shared by the CLI and the golden tests.
 
 **Input handling**: input is always fixed to UTF-8. Malformed UTF-8 bytes cause `CharTable::encode`/`Vocab::encode` to return `ErrorCode::InvalidUtf8`; the CLI flushes any output already produced for earlier lines and then aborts immediately (exit code 1, stderr message).
+
+**Unicode version**: when `Segmenter::unicode_version_mismatch()` reports that the model was trained with different grapheme data (Section 6.3), a warning goes to stderr and segmentation proceeds.
 
 ### 7.2 `segmenter train` (Training)
 
@@ -687,7 +693,8 @@ include/segmentlib/
 │   ├── expected.h              # Expected<T,E> / Unexpected<E> (std::expected is C++23)
 │   ├── span.h                  # Span<T> (std::span is C++20)
 │   ├── endian.h                # byte order + byteswap (std::endian/byteswap are C++20/23)
-│   └── attributes.h            # SEGMENTLIB_FLATTEN (inlining hint for the header-only hot path)
+│   ├── attributes.h            # SEGMENTLIB_FLATTEN (inlining hint for the header-only hot path)
+│   └── file.h                  # whole-file read shared by the model loaders
 ├── segmenter.h                 # (L6) public API (Section 6)
 ├── output.h                    # output formatting (append_full_line)
 └── types.h                     # Segments/Error (Section 6.2, no dependencies)
@@ -699,6 +706,7 @@ src/                            # inference is header-only: only training and th
 │   ├── dataset.{h,cpp}          # mini-batching
 │   ├── net.{h,cpp}              # forward/backward pass
 │   ├── adam.{h,cpp}             # Adam optimizer
+│   ├── sgd.{h,cpp}              # plain SGD (`--optimizer sgd`, Section 4.9)
 │   ├── trainer.{h,cpp}          # training loop
 │   ├── quantize.{h,cpp}         # PTQ int16 quantization
 │   ├── exporter.{h,cpp}         # model-file writing
@@ -729,7 +737,7 @@ src/                            # inference is header-only: only training and th
 
 **L5: `kytea::KyteaBackend`** — a class satisfying the `tokenize` signature defined in Section 2. It holds a `Model` internally and is simply a thin adapter that calls the `scorer` functions.
 
-**L6: `Segmenter`** — as designed in Section 2. `std::variant<KyteaBackend, MlpBackend>`.
+**L6: `Segmenter`** — as designed in Section 2. `std::variant<KyteaBackend, MlpBackend, EdBackend>`.
 
 **CLI layer** — `predict_command.cpp` is just a thin loop: "parse arguments → `Segmenter::load` → read stdin line by line, `tokenize` → write output." No business logic.
 
@@ -738,19 +746,26 @@ src/                            # inference is header-only: only training and th
 ```
 cpp-segmentlib/
 ├── CMakeLists.txt                # top level. C++23, just bundles subdirectories
+├── justfile                      # build/test/train/eval/bench recipes
 ├── include/segmentlib/           # public headers (per Section 8.1)
 ├── src/                          # implementation (per Section 8.1)
-│   ├── CMakeLists.txt            # segmentlib (library) target definition
+│   ├── CMakeLists.txt            # segmentlib (header-only interface) and segmentlib_train targets
 │   └── cli/
 │       └── CMakeLists.txt        # segmenter (executable) target definition
+├── third_party/
+│   └── cpp-fstlib/               # vendored FST header (MIT); `just vendor-update` refreshes it
 ├── tests/
 │   ├── CMakeLists.txt
 │   ├── unit/                     # per-module tests
-│   ├── golden/                   # tests matched against real KyTea binary output
+│   ├── golden/                   # tests that pin segmentation output
 │   │   ├── golden_test.cpp
-│   │   └── fixtures/
+│   │   ├── fixtures/
+│   │   │   ├── input.txt
+│   │   │   └── expected.txt      # `kytea -notags`'s output
+│   │   └── mlp_fixtures/
 │   │       ├── input.txt
-│   │       └── expected.txt      # `kytea -notags`'s output
+│   │       └── expected.txt      # the bundled MLP model's output
+│   ├── data/                     # GraphemeBreakTest.txt (UAX #29 conformance cases)
 │   └── consumer/                 # a downstream project; built by check_consumer.sh,
 │                                 # not part of the main build
 ├── models/
@@ -766,14 +781,18 @@ cpp-segmentlib/
 │   ├── fetch_kytea_model.sh
 │   ├── fetch_ud_gsd_corpus.sh
 │   ├── fetch_ud_pud_corpus.sh
+│   ├── fetch_unidic_dict.sh
 │   ├── convert_ud_gsd_corpus.py
+│   ├── convert_unidic_dict.py
 │   ├── eval_segmentation.py
 │   ├── extract_dict.py
 │   ├── check_consumer.sh
 │   ├── gen_egc_table.py
-│   └── strip_kytea_tags.py
+│   ├── strip_kytea_tags.py
+│   ├── release.sh
+│   └── vendor_update_fstlib.sh
 ├── docs/
-│   └── design.ja.md / design.md
+│   └── design.ja.md / design.md / RELEASING.md
 ├── .github/workflows/ci.yml
 └── .gitignore
 ```
@@ -784,7 +803,7 @@ cpp-segmentlib/
 - **One vendored dependency on the inference path**: `third_party/cpp-fstlib` (header-only, MIT), the FST behind the dictionary matcher (Section 4.4). `mlp/dictionary.h` holds the `fst::map` directly and includes it, so a consumer of the header-only inference path compiles it too and needs `third_party/` on their include path (the `segmentlib` CMake target carries it as a SYSTEM interface include). The include is written as `"cpp-fstlib/fstlib.h"` and the include path is `third_party/`, so shadowing it from a consuming project takes a matching directory name rather than just a file called `fstlib.h`. Everything else is the standard library. Only the training path (`SEGMENTLIB_BUILD_TRAINING`) links BLAS.
 - **The test framework is `doctest`** (header-only, fetched via CMake's `FetchContent`).
 - **`models/kytea/` and `corpus/` are not git-tracked**: added to `.gitignore`, with only download scripts like `scripts/fetch_*.sh` kept in the repository. The exception is `models/mlp/`, the trained MLP reference model (~2.1 MB, this project's own artifact): it is committed with its NOTICE so a fresh clone segments text without a download or a training run, and its output is pinned by a regression test. Retraining it is a release-time act (docs/RELEASING.md).
-- **`golden/` tests use fixed data**: pairs of known input sentences and real KyTea execution results are committed as fixed data in `tests/golden/fixtures/`. Tests are skipped when the model is absent (CI-resilient).
+- **`golden/` tests use fixed data**: pairs of known input sentences and real KyTea execution results are committed as fixed data in `tests/golden/fixtures/`. Tests are skipped when the model is absent (CI-resilient). `tests/golden/mlp_fixtures/` likewise pins the bundled MLP model's output; that model is committed, so those tests always run, and a retrain regenerates the fixture (docs/RELEASING.md).
 
 ### 8.4 Build/Toolchain Requirements
 
@@ -800,8 +819,8 @@ cpp-segmentlib/
   ctest --test-dir build --output-on-failure
   ```
   Always specify `-DCMAKE_BUILD_TYPE=Release` when benchmarking (a `Debug` build makes inference tens of times slower).
-- **Using it from another project**: `add_subdirectory()` or `FetchContent`, then link the `segmentlib` target; its public include path comes with it. The developer targets — the test suite (which fetches doctest over the network), the benchmarks and the `segmenter` CLI — default to on for a standalone build and **off when segmentlib is not the top-level project**, so a consumer's `all` builds one static library. `CMAKE_BUILD_TYPE` is likewise only defaulted to `Release` when standalone, since under `FetchContent` the cache belongs to the consumer. There is no install/export set, so `find_package(segmentlib)` is not supported.
-- **CI**: `.github/workflows/ci.yml`. 7 jobs: macOS arm64 (NEON), Linux x86_64 (AVX2/scalar, GCC 14 + OpenBLAS), Windows (MSVC, AVX2, best-effort), an ASan + UBSan job (the only one built with assertions on), a golden job that fetches the KyTea model (cached) and sets `SEGMENTLIB_REQUIRE_GOLDEN` so a missing model fails instead of skipping, and a consumer job (`scripts/check_consumer.sh`) that builds `tests/consumer/` against the working tree and asserts a consumer's build gets the library alone — no test/bench/CLI artifacts, no doctest fetch, no build type chosen for them. All jobs build with `-DSEGMENTLIB_WARNINGS_AS_ERRORS=ON`.
+- **Using it from another project**: `add_subdirectory()` or `FetchContent`, then link the `segmentlib` target; its public include path comes with it. The developer targets — the test suite (which fetches doctest over the network), the benchmarks and the `segmenter` CLI — default to on for a standalone build and **off when segmentlib is not the top-level project**, so a consumer's `all` builds nothing of segmentlib's: inference is header-only. `CMAKE_BUILD_TYPE` is likewise only defaulted to `Release` when standalone, since under `FetchContent` the cache belongs to the consumer. There is no install/export set, so `find_package(segmentlib)` is not supported.
+- **CI**: `.github/workflows/ci.yml`. 8 jobs: macOS arm64 (NEON), Linux x86_64 AVX2 and Linux x86_64 scalar (GCC 14 + OpenBLAS), Windows (MSVC, AVX2, best-effort), an ASan + UBSan job (the only one built with assertions on), a golden job that fetches the KyTea model (cached) and sets `SEGMENTLIB_REQUIRE_GOLDEN` so a missing model fails instead of skipping, and two consumer jobs (`scripts/check_consumer.sh`, at C++17 and C++23) that build `tests/consumer/` against the working tree and assert a consumer's build gets the library alone — no test/bench/CLI artifacts, no doctest fetch, no build type chosen for them. Every job except Windows (best-effort) and consumer builds with `-DSEGMENTLIB_WARNINGS_AS_ERRORS=ON` (`just lint` does the same locally); the consumer jobs pass no segmentlib options on purpose, since they play a naive downstream project.
 
 ## 9. Benchmarks (Inference Speed)
 

@@ -43,7 +43,8 @@ serialize_model(const QuantizedModel& quantized, const Vocab& vocab,
     out.write_line(format.header_line());
 
     // Config (fields 1-4b). unicode_version records which Unicode data the
-    // EGC splitter used at training time; the loader warns on mismatch.
+    // EGC splitter used at training time; Segmenter::unicode_version_mismatch()
+    // reports a mismatch.
     out.write<std::uint8_t>(c.window);
     out.write<std::uint16_t>(c.embed_dim);
     out.write<std::uint16_t>(c.hidden);

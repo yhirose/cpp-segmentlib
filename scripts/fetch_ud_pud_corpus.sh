@@ -4,7 +4,7 @@
 # UD_Japanese-GSD (fetch_ud_gsd_corpus.sh). PUD is a 1000-sentence, single-file
 # test corpus (news / Wikipedia, translated parallel text) built on the same
 # UniDic short-unit segmentation standard as GSD, so a GSD-trained model can be
-# evaluated on it to measure cross-genre generalization (design.ja.md 5.8).
+# evaluated on it to measure cross-genre generalization (design.ja.md 4.8).
 #
 # The CoNLL-U layout (surface column, XPOS, MISC UnidicInfo reading) is
 # identical to GSD, so convert_ud_gsd_corpus.py is reused verbatim.

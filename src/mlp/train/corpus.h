@@ -9,7 +9,7 @@
 
 #include "segmentlib/types.h"
 
-// Training-side KyTea corpus readers (design.ja.md 6節). These headers live
+// Training-side KyTea corpus readers (design.ja.md 5節). These headers live
 // under src/ (not include/): the training pipeline is a development tool and
 // has no public headers.
 

@@ -1,8 +1,8 @@
 #!/usr/bin/env python3
 """Converts UD_Japanese-GSD CoNLL-U files into KyTea full-annotation corpus
-format (design.ja.md 6.1), so the freely-licensed UD treebank can stand in
+format (design.ja.md 5.1), so the freely-licensed UD treebank can stand in
 for the (license-restricted, unobtainable) BCCWJ corpus KyTea's distributed
-model was trained on (design.ja.md 5.8 / memory mlp-eval-corpus).
+model was trained on (design.ja.md 4.8).
 
 Tag level 0 is the UniDic XPOS (detailed POS, e.g. "名詞-普通名詞-一般");
 level 1 is the reading, taken from the first comma-separated field of the

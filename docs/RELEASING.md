@@ -9,8 +9,9 @@ just release --run      # bump, commit "Release vX.Y.Z", tag, push
 ```
 
 `scripts/release.sh` reads the current version from
-`include/segmentlib/types.h` and requires a clean working tree and green CI
-on the latest commit (the Windows job is continue-on-error and cannot
+`include/segmentlib/types.h` and requires a clean working tree, a branch
+that tracks a remote (the push at the end needs one), and green CI on the
+latest commit (the Windows job is continue-on-error and cannot
 block). If the current version has never been tagged, it is released as-is
 without a bump (the bootstrap case). Otherwise it picks the bump the same
 way cpp-httplib/cpp-peglib pick theirs from abidiff, just with a different
@@ -32,14 +33,15 @@ other sync mechanism, so hand-edits must change both):
 Retrain `models/mlp/ja-ud-gsd.mod` **only if training inputs changed** --
 the trainer, the corpus pin in `scripts/fetch_ud_gsd_corpus.sh`, or the
 dictionary. An inference-only or docs-only release ships the existing model
-untouched; that is the normal case, and it is what keeps 3 MB binaries out
+untouched; that is the normal case, and it is what keeps 2 MB binaries out
 of the history for every small fix.
 
 When retraining:
 
 1. `just setup && just model`, then update `models/mlp/NOTICE` (corpus tag
-   and commit) and `models/mlp/README.md` (training inputs, accuracy) to
-   match.
+   and commit), `models/mlp/README.md` (training inputs, accuracy) and the
+   accuracy quoted in the top-level README.md (the MLP backend bullet and
+   "Train the reference model") to match.
 
 2. Regenerate the MLP golden fixture and review the diff by eye before
    accepting it:

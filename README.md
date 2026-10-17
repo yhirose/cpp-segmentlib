@@ -1,12 +1,13 @@
 # cpp-segmentlib
 
-A C++ Japanese word segmentation library using the pointwise prediction approach, as in KyTea / Vaporetto.
+A C++ word segmentation library using the pointwise prediction approach, as in KyTea / Vaporetto.
 Each character boundary is classified independently as a binary decision (split / don't split). Unlike lattice + Viterbi minimum-cost approaches (e.g. MeCab), it requires no dictionary cost design or dynamic programming.
+It is not tied to one language: given a corpus in KyTea's format, a model can be trained for any language that needs segmentation. The bundled reference model targets Japanese.
 
 The public API is a single interface, backed internally by a set of interchangeable backends:
 
 - **KyTea-compatible backend** — loads KyTea's trained models as-is and performs inference with the same feature extraction and linear SVM classifier. Byte-for-byte agreement with KyTea's own output is verified.
-- **Custom MLP backend** — uses a quantized (int16) MLP with a SIMD-accelerated scorer instead of a linear SVM as the classifier. On UD_Japanese-GSD (no dictionary) it runs ~3.7x faster than KyTea on the same CPU thread, and trails a KyTea model trained on the same data by ~0.7-0.9pt of boundary F1. A trained reference model ships in the repository ([models/mlp/](models/mlp/), ~2.1 MB; the model file is CC BY-SA 4.0 — see its NOTICE — separately from this repository's MIT code).
+- **Custom MLP backend** — uses a quantized (int16) MLP with a SIMD-accelerated scorer instead of a linear SVM as the classifier. Its input is grapheme clusters embedded from their codepoints (plus optional dictionary features), with none of the character-type features KyTea hand-designs for Japanese scripts. A trained reference model ships in the repository ([models/mlp/](models/mlp/), ~2.1 MB; the model file is CC BY-SA 4.0 — see its NOTICE — separately from this repository's MIT code). Trained on UD_Japanese-GSD with the UniDic word list as its dictionary, it scores 99.1% boundary F1 on GSD test and 99.3% on UD_Japanese-PUD, about 0.3pt behind a KyTea model trained on the same corpus and dictionary. Without a dictionary the MLP runs ~3.7x faster than KyTea on the same CPU thread, and trails KyTea trained the same way by ~0.7-0.9pt.
 
 - **EDLA backend** — the MLP backend's network trained by the Error Diffusion Learning Algorithm ([arXiv:2504.14814](https://arxiv.org/abs/2504.14814)) instead of backpropagation: one global error signal is broadcast to the hidden layer, and each unit builds its own update from its own activity. Included as a study of whether a biologically motivated local rule can train this task; Section 11 of the design document reports how it compares, measured on the same corpus at the same network size.
 

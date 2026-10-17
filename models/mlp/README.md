@@ -12,7 +12,7 @@ committed copy here replaced that arrangement.
 
 | | |
 |---|---|
-| Trained by | segmentlib v0.1.0 (`segmenter train --backend mlp`) |
+| Trained by | segmentlib v0.3.0 (`segmenter train --backend mlp`) |
 | Corpus | UD_Japanese-GSD r2.18 (commit `33e7310b`), fetched by `scripts/fetch_ud_gsd_corpus.sh` |
 | Dictionary | unidic-mecab 2.1.2 word list, via `scripts/fetch_unidic_dict.sh` |
 | Command | `just model` (see the `model:` recipe in the justfile for the exact flags; default seed) |
@@ -23,9 +23,11 @@ produced this file (two runs, byte-identical). The GEMMs go through BLAS,
 so reproduction on a different platform or BLAS implementation may differ
 in the last bits; the seed and inputs above are the authoritative record.
 
-As a segmenter it trails a KyTea model trained on the same corpus by roughly
-0.7-0.9pt of boundary F1 (see the top-level README); it is the reference
-model, favoring speed and zero setup over the last few tenths of a point.
+It scores 99.1% boundary F1 on the UD-GSD test split and 99.3% on
+UD_Japanese-PUD. A KyTea model trained on the same corpus with the same
+dictionary is about 0.3pt ahead (99.43% / 99.54%; Section 4.8 of
+docs/design.md); this is the reference model, favoring speed and zero setup
+over the last few tenths of a point.
 
 Retraining policy: only when the trainer or the training inputs change, not
 on every release -- docs/RELEASING.md. The regression test in

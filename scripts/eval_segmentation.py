@@ -1,12 +1,12 @@
 #!/usr/bin/env python3
-"""Boundary precision/recall/F1 evaluation (design.ja.md 5.8): compares a
+"""Boundary precision/recall/F1 evaluation (design.ja.md 4.8): compares a
 backend's word-segmentation output against a KyTea full-annotation gold
 corpus. Used to evaluate KyTea and the MLP backend, trained on the same
-corpus, against each other (memory mlp-eval-corpus).
+corpus, against each other.
 
 Both backends emit their tokenized output through the same escaping
 convention (space/slash/ampersand/backslash escaped with backslash;
-output.cpp's append_escaped and KyTea's own showString agree, confirmed by
+output.h's append_escaped and KyTea's own showString agree, confirmed by
 this repo's golden tests), so predicted and gold lines are parsed identically
 here.
 

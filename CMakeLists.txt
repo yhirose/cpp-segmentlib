@@ -10,7 +10,7 @@ set(CMAKE_CXX_EXTENSIONS OFF)
 
 # Only when this is the build being run. Under add_subdirectory()/FetchContent
 # the cache is the consuming project's, so forcing a build type there decides
-# it for their code too, from a dependency they added for one static library.
+# it for their code too, from a dependency they added for a set of headers.
 if(PROJECT_IS_TOP_LEVEL AND NOT CMAKE_BUILD_TYPE AND NOT CMAKE_CONFIGURATION_TYPES)
     set(CMAKE_BUILD_TYPE Release CACHE STRING "Build type" FORCE)
 endif()
@@ -27,8 +27,8 @@ if(MSVC)
 endif()
 
 # Developer targets default to on for a standalone build and off for a
-# consumer: a project that pulls this in via FetchContent wants one static
-# library, not our test suite (which fetches doctest over the network), our
+# consumer: a project that pulls this in via FetchContent wants the headers,
+# not our test suite (which fetches doctest over the network), our
 # benchmarks, or our CLI in their `all` target.
 option(SEGMENTLIB_BUILD_TESTS "Build the test suite" ${PROJECT_IS_TOP_LEVEL})
 option(SEGMENTLIB_BUILD_BENCH "Build the benchmark tools" ${PROJECT_IS_TOP_LEVEL})
