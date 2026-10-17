@@ -32,7 +32,7 @@ test: build
 test-only pattern: build
     {{build_dir}}/tests/segmentlib_tests -tc="*{{pattern}}*" -s
 
-# Build with warnings as errors, as every CI job but Windows and consumer does
+# Build with warnings as errors, as every CI job but Windows, sanitizers and consumer does
 lint:
     cmake -S . -B {{build_dir}}-werror -DCMAKE_BUILD_TYPE=Release \
         -DSEGMENTLIB_BUILD_TRAINING=ON -DSEGMENTLIB_WARNINGS_AS_ERRORS=ON

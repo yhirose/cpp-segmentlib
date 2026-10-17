@@ -4,8 +4,8 @@
 # dispatched path is bit-exact with the scalar oracle, so each runner verifies
 # its own SIMD path on real hardware.
 #
-# Three jobs sit outside that matrix: `sanitizers` (ASan + UBSan, the only
-# build here with assertions on), `golden`, which fetches the KyTea model so
+# Three jobs sit outside that matrix: `sanitizers` (ASan + UBSan, with
+# assertions on), `golden`, which fetches the KyTea model so
 # the byte-parity tests actually run instead of skipping themselves, and
 # `consumer`, which builds segmentlib the way a downstream project does.
 name: CI
@@ -31,9 +31,13 @@ jobs:
             cmake_args: >-
               -DCMAKE_CXX_COMPILER=g++-14
               -DCMAKE_CXX_FLAGS=-mavx2
+          # Release flags without -DNDEBUG: the code under assert() is
+          # compiled with -Werror here, since `sanitizers` cannot use it.
           - name: Linux x86_64 (scalar)
             os: ubuntu-24.04
-            cmake_args: -DCMAKE_CXX_COMPILER=g++-14
+            cmake_args: >-
+              -DCMAKE_CXX_COMPILER=g++-14
+              -DCMAKE_CXX_FLAGS_RELEASE=-O3
     steps:
       - uses: actions/checkout@v4
 
@@ -67,8 +71,13 @@ jobs:
   # ASan + UBSan. The parsers are hand-written over untrusted model bytes, the
   # kernels do unaligned SIMD pointer arithmetic, and the batch path is a
   # lock-free atomic cursor — all of which the Release-only matrix above cannot
-  # see. This job is also the only one that builds with assertions enabled
-  # (hence the RelWithDebInfo flags without -DNDEBUG).
+  # see. Assertions are enabled too (hence the RelWithDebInfo flags without
+  # -DNDEBUG), so they run under the sanitizers.
+  #
+  # No -Werror here: GCC documents that sanitizers raise the rate of false
+  # positive warnings and recommends against combining the two (GCC 14 emits a
+  # bogus -Warray-bounds on a plain vector assignment under ASan). The scalar
+  # entry of the matrix compiles the asserted code with -Werror instead.
   sanitizers:
     name: Linux x86_64 (ASan + UBSan)
     runs-on: ubuntu-24.04
@@ -86,7 +95,6 @@ jobs:
           -DCMAKE_CXX_COMPILER=g++-14
           -DSEGMENTLIB_BUILD_TRAINING=ON
           -DSEGMENTLIB_BUILD_BENCH=OFF
-          -DSEGMENTLIB_WARNINGS_AS_ERRORS=ON
           -DCMAKE_CXX_FLAGS="-fsanitize=address,undefined -fno-omit-frame-pointer -fno-sanitize-recover=undefined"
           -DCMAKE_EXE_LINKER_FLAGS="-fsanitize=address,undefined"
       - name: Build
